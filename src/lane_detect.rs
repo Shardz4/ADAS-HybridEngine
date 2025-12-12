@@ -79,7 +79,51 @@ fn hough_transform(edges: &GrayImage) -> Vec<Line> {
         return vec![(0.0, 0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 0.0)]; // dummy fallback
     }
 
-    
+    // group into  left (theta 0-45 deg) and right (theta 135-180 deg) slopes
+    let mut left_lines: Vec<Line> = Vec::new();
+    let mut right_lines: Vec<Line> = Vec::new();
+    let height = edges.height() as f64;
 
+    for polar in lines{
+        let theta_rad = polar.theta;
+        let rho = polar.rho;
+        if theta_rad<0.0 {
+            continue;
+        }
+        
+        // converting polar to cartesiona line
+
+        let a = std::f64::consts::PI / 2.0 - theta_rad;
+        let x1 = (rho / a.cos()).cos() * a;
+        let y1 = (rho / a.cos()).sin() * a;
+        let x2 = (rho - height * theta_rad.sin()) / theta_rad.cos();
+        let y2 = height;
+
+        let line = if theta_rad < std::f64::consts::FRAC_PI_4{
+            //left lane (+ve slope)
+            (x1.max(0.0), y1, x2.max(0.0), y2)
+        } else if theta_rad > 3.0 * std::f64::consts::FRAC_PI_4{
+            //right lane (-ve slope)
+            (x2,y2,x1,y1)
+        } else {
+            continue;
+        };
+
+        if let Some((x1, _, x2, _)) = (line.0 as i32, line.2 as i32){
+            if x1 < edgesa.width() as i32 / 2 {
+                left_lines.push(line);
+            } else {
+                right_lines.push(line);
+            }
+        }
+
+    }
+    // averaging lines
+    let avg_left = average_lines(&left_lines).unwrap_or((100.0, height, 400.0, height / 2.0));
+    let avg_right = average_lines(&right_lines).unwrap_or((900.0, height, 1100.0, height / 2.0));
+
+    vec![avg_left, avg_right]
 }
+
+
 
