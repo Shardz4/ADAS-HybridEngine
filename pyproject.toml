@@ -4,7 +4,10 @@ build-backend = "maturin"
 
 [project]
 name = "adas_pilot"
+version = "0.1.0"
 requires-python = ">=3.9"
+readme = "README.md"
+description = "ADAS lane detection Rust extension"
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
