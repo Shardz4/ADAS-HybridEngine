@@ -1,10 +1,10 @@
-==> 2025-12-13 21:31:05 <==
+==> 2025-12-15 20:03:28 <==
 # cmd: D:\miniconda\Scripts\conda-script.py create --prefix ./envs/adas_pilot python=3.14 -c conda-forge
 # conda version: 25.9.1
 +conda-forge/noarch::ca-certificates-2025.11.12-h4c7d964_0
 +conda-forge/noarch::pip-25.3-pyh145f28c_0
 +conda-forge/noarch::python_abi-3.14-8_cp314
-+conda-forge/noarch::tzdata-2025b-h8577fbf_1
++conda-forge/noarch::tzdata-2025c-h8577fbf_0
 +conda-forge/win-64::bzip2-1.0.8-h0ad9c76_8
 +conda-forge/win-64::libexpat-2.7.3-hac47afa_0
 +conda-forge/win-64::libffi-3.5.2-h52bdfb6_0

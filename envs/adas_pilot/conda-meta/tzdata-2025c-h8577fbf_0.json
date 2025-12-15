@@ -1,24 +1,24 @@
 {
   "name": "tzdata",
-  "version": "2025b",
-  "build": "h8577fbf_1",
-  "build_number": 1,
+  "version": "2025c",
+  "build": "h8577fbf_0",
+  "build_number": 0,
   "channel": "https://conda.anaconda.org/conda-forge/win-64",
   "subdir": "noarch",
-  "fn": "tzdata-2025b-h8577fbf_1.conda",
-  "md5": "e4e8496b68cf5f25e76fbe67f3856550",
-  "url": "https://conda.anaconda.org/conda-forge/noarch/tzdata-2025b-h8577fbf_1.conda",
-  "sha256": "865716d3e2ccaca1218462645830d2370ab075a9a118c238728e1231a234bc6c",
+  "fn": "tzdata-2025c-h8577fbf_0.conda",
+  "md5": "338201218b54cadff2e774ac27733990",
+  "url": "https://conda.anaconda.org/conda-forge/noarch/tzdata-2025c-h8577fbf_0.conda",
+  "sha256": "50fad5db6734d1bb73df1cf5db73215e326413d4b2137933f70708aa1840e25b",
   "depends": [],
   "constrains": [],
   "noarch": "generic",
   "license": "LicenseRef-Public-Domain",
   "package_type": "noarch_generic",
-  "timestamp": 1765580300000,
-  "size": 119010,
+  "timestamp": 1765745742000,
+  "size": 119204,
   "requested_spec": "None",
-  "package_tarball_full_path": "C:\\Users\\arnav\\.conda\\pkgs\\tzdata-2025b-h8577fbf_1.conda",
-  "extracted_package_dir": "C:\\Users\\arnav\\.conda\\pkgs\\tzdata-2025b-h8577fbf_1",
+  "package_tarball_full_path": "C:\\Users\\arnav\\.conda\\pkgs\\tzdata-2025c-h8577fbf_0.conda",
+  "extracted_package_dir": "C:\\Users\\arnav\\.conda\\pkgs\\tzdata-2025c-h8577fbf_0",
   "files": [
     "share/zoneinfo/Africa/Abidjan",
     "share/zoneinfo/Africa/Accra",
@@ -1417,9 +1417,9 @@
       {
         "_path": "share/zoneinfo/America/Ensenada",
         "path_type": "hardlink",
-        "sha256": "3065abfbab680d16ab8cc5d36a23885a004558d6f0ee51ef89d2ee3ca1717c8a",
-        "size_in_bytes": 1079,
-        "sha256_in_prefix": "3065abfbab680d16ab8cc5d36a23885a004558d6f0ee51ef89d2ee3ca1717c8a"
+        "sha256": "af9aea4aee505143fa5e847643c0ffe164190c38411010ac7f0b170f4098a6c8",
+        "size_in_bytes": 1367,
+        "sha256_in_prefix": "af9aea4aee505143fa5e847643c0ffe164190c38411010ac7f0b170f4098a6c8"
       },
       {
         "_path": "share/zoneinfo/America/Fort_Nelson",
@@ -2005,9 +2005,9 @@
       {
         "_path": "share/zoneinfo/America/Santa_Isabel",
         "path_type": "hardlink",
-        "sha256": "3065abfbab680d16ab8cc5d36a23885a004558d6f0ee51ef89d2ee3ca1717c8a",
-        "size_in_bytes": 1079,
-        "sha256_in_prefix": "3065abfbab680d16ab8cc5d36a23885a004558d6f0ee51ef89d2ee3ca1717c8a"
+        "sha256": "af9aea4aee505143fa5e847643c0ffe164190c38411010ac7f0b170f4098a6c8",
+        "size_in_bytes": 1367,
+        "sha256_in_prefix": "af9aea4aee505143fa5e847643c0ffe164190c38411010ac7f0b170f4098a6c8"
       },
       {
         "_path": "share/zoneinfo/America/Santarem",
@@ -2131,9 +2131,9 @@
       {
         "_path": "share/zoneinfo/America/Tijuana",
         "path_type": "hardlink",
-        "sha256": "3065abfbab680d16ab8cc5d36a23885a004558d6f0ee51ef89d2ee3ca1717c8a",
-        "size_in_bytes": 1079,
-        "sha256_in_prefix": "3065abfbab680d16ab8cc5d36a23885a004558d6f0ee51ef89d2ee3ca1717c8a"
+        "sha256": "af9aea4aee505143fa5e847643c0ffe164190c38411010ac7f0b170f4098a6c8",
+        "size_in_bytes": 1367,
+        "sha256_in_prefix": "af9aea4aee505143fa5e847643c0ffe164190c38411010ac7f0b170f4098a6c8"
       },
       {
         "_path": "share/zoneinfo/America/Toronto",
@@ -4287,9 +4287,9 @@
       {
         "_path": "share/zoneinfo/Mexico/BajaNorte",
         "path_type": "hardlink",
-        "sha256": "3065abfbab680d16ab8cc5d36a23885a004558d6f0ee51ef89d2ee3ca1717c8a",
-        "size_in_bytes": 1079,
-        "sha256_in_prefix": "3065abfbab680d16ab8cc5d36a23885a004558d6f0ee51ef89d2ee3ca1717c8a"
+        "sha256": "af9aea4aee505143fa5e847643c0ffe164190c38411010ac7f0b170f4098a6c8",
+        "size_in_bytes": 1367,
+        "sha256_in_prefix": "af9aea4aee505143fa5e847643c0ffe164190c38411010ac7f0b170f4098a6c8"
       },
       {
         "_path": "share/zoneinfo/Mexico/BajaSur",
@@ -4826,30 +4826,30 @@
       {
         "_path": "share/zoneinfo/iso3166.tab",
         "path_type": "hardlink",
-        "sha256": "a01a5d158f31d46ad8e6f8cc2a06c641810682a9397d460320f68d5421b65e71",
-        "size_in_bytes": 4791,
-        "sha256_in_prefix": "a01a5d158f31d46ad8e6f8cc2a06c641810682a9397d460320f68d5421b65e71"
+        "sha256": "837c80785080c8433fd9d4ea87e78f161ac7a40389301c5153d4f90198baeb2a",
+        "size_in_bytes": 4841,
+        "sha256_in_prefix": "837c80785080c8433fd9d4ea87e78f161ac7a40389301c5153d4f90198baeb2a"
       },
       {
         "_path": "share/zoneinfo/leap-seconds.list",
         "path_type": "hardlink",
-        "sha256": "0bd731802f83a7ffbb3a7cd17f87af670032e16ad71b14747b057ca655277c25",
-        "size_in_bytes": 5069,
-        "sha256_in_prefix": "0bd731802f83a7ffbb3a7cd17f87af670032e16ad71b14747b057ca655277c25"
+        "sha256": "f060924e3a76ee4e464f6664035b7beae834155dd93a81c50e922f94dfdb1d20",
+        "size_in_bytes": 5065,
+        "sha256_in_prefix": "f060924e3a76ee4e464f6664035b7beae834155dd93a81c50e922f94dfdb1d20"
       },
       {
         "_path": "share/zoneinfo/leapseconds",
         "path_type": "hardlink",
-        "sha256": "816033c11b84465a03e800c5e55ead515dba53fa159b9c61da7602ea357060e8",
-        "size_in_bytes": 3257,
-        "sha256_in_prefix": "816033c11b84465a03e800c5e55ead515dba53fa159b9c61da7602ea357060e8"
+        "sha256": "5514348190a3ef9f0f65fee87fca59b4d6d9292702ae0e84960011159a7c2767",
+        "size_in_bytes": 3694,
+        "sha256_in_prefix": "5514348190a3ef9f0f65fee87fca59b4d6d9292702ae0e84960011159a7c2767"
       },
       {
         "_path": "share/zoneinfo/tzdata.zi",
         "path_type": "hardlink",
-        "sha256": "af28a5c1af2d24b1ae33a9d89fa81a49ce2026c506d588eabf446b4ff69052f7",
-        "size_in_bytes": 107469,
-        "sha256_in_prefix": "af28a5c1af2d24b1ae33a9d89fa81a49ce2026c506d588eabf446b4ff69052f7"
+        "sha256": "81ecc285aa40576eb14a885707dd30c7d97187982a503dfe6a064a77cd515275",
+        "size_in_bytes": 107441,
+        "sha256_in_prefix": "81ecc285aa40576eb14a885707dd30c7d97187982a503dfe6a064a77cd515275"
       },
       {
         "_path": "share/zoneinfo/zone.tab",
@@ -4861,21 +4861,21 @@
       {
         "_path": "share/zoneinfo/zone1970.tab",
         "path_type": "hardlink",
-        "sha256": "57194e43b001b8f832987b21b82953d997aeeaebeb53a8520140bc12d7d8cfcc",
-        "size_in_bytes": 17597,
-        "sha256_in_prefix": "57194e43b001b8f832987b21b82953d997aeeaebeb53a8520140bc12d7d8cfcc"
+        "sha256": "e9d9fe30942a880f756b73f649667d8647a1ecf2131149445d9cc24c65e4ee8f",
+        "size_in_bytes": 17605,
+        "sha256_in_prefix": "e9d9fe30942a880f756b73f649667d8647a1ecf2131149445d9cc24c65e4ee8f"
       },
       {
         "_path": "share/zoneinfo/zonenow.tab",
         "path_type": "hardlink",
-        "sha256": "246743bcce0dd15184606543d8081cbb1204c5b6ff8237b758cb67c10900ce2f",
-        "size_in_bytes": 8084,
-        "sha256_in_prefix": "246743bcce0dd15184606543d8081cbb1204c5b6ff8237b758cb67c10900ce2f"
+        "sha256": "a15b85312b66c33c2df5471e3a9d5c55fd98153f8d6eb47878d8a3488b0656a5",
+        "size_in_bytes": 8002,
+        "sha256_in_prefix": "a15b85312b66c33c2df5471e3a9d5c55fd98153f8d6eb47878d8a3488b0656a5"
       }
     ]
   },
   "link": {
-    "source": "C:\\Users\\arnav\\.conda\\pkgs\\tzdata-2025b-h8577fbf_1",
+    "source": "C:\\Users\\arnav\\.conda\\pkgs\\tzdata-2025c-h8577fbf_0",
     "type": 1
   }
 }
