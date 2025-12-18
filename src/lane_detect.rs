@@ -1,122 +1,132 @@
-
+use image::{GrayImage, ImageBuffer, Luma}; // Removed unused 'Pixel'
+use image::imageops; // Removed unused 'GenericImageView'
+use imageproc::edges::canny;
+use imageproc::hough::{detect_lines, LineDetectionOptions, PolarLine};
 use ndarray::ArrayView3;
-use opencv::{core, imgproc, prelude::*, types};
-use std::cell::RefCell;
+use std::f64::consts::PI;
 
-pub type Line = (f64, f64, f64, f64);
+pub type Line = (f64, f64, f64, f64); // (x1, y1, x2, y2)
 
-thread_local! {
-    // per-thread reusable buffer for Hough output
-    static LINES_BUF: RefCell<types::VectorOfVec4i> = RefCell::new(types::VectorOfVec4i::new());
+/// Converts BGR ndarray to grayscale GrayImage.
+fn bgr_to_gray(frame: &ArrayView3<u8>) -> GrayImage {
+    let (height, width, _) = frame.dim();
+    let mut gray_img = ImageBuffer::new(width as u32, height as u32);
+    for (x, y, pixel) in gray_img.enumerate_pixels_mut() {
+        let bgr = frame[[y as usize, x as usize, 0]];
+        let g = frame[[y as usize, x as usize, 1]];
+        let r = frame[[y as usize, x as usize, 2]];
+        let gray = 0.299 * r as f32 + 0.587 * g as f32 + 0.114 * bgr as f32;
+        *pixel = Luma([gray as u8]);
+    }
+    gray_img
 }
 
-/// Detect lanes using OpenCV's Canny + HoughLinesP on a BGR u8 image.
-/// Returns Vec<Line> with (x1,y1,x2,y2) in pixel coordinates.
-pub fn detect_lanes(frame: &ArrayView3<u8>) -> Result<Vec<Line>, String> {
-    let shape = frame.shape();
-    if shape.len() != 3 || shape[2] != 3 {
-        return Err("expected HxWx3 BGR uint8 image".into());
-    }
-    let h = shape[0] as i32;
-    let w = shape[1] as i32;
+/// Applies Gaussian blur.
+fn apply_gaussian_blur(gray: &GrayImage) -> GrayImage {
+    imageops::blur(gray, 2.0)
+}
 
-    // require contiguous slice
-    let data = frame
-        .as_slice()
-        .ok_or_else(|| "frame must be C-contiguous".to_string())?;
+/// Creates a trapezoidal ROI mask.
+fn apply_roi(blurred: &GrayImage, width: u32, height: u32) -> GrayImage {
+    let mut roi = ImageBuffer::new(width, height);
+    let vertices: [(u32, u32); 4] = [
+        (0, height),                     // Bottom-left
+        (width, height),                 // Bottom-right
+        (width * 3 / 5, height * 3 / 5), // Top-right
+        (width * 2 / 5, height * 3 / 5), // Top-left
+    ];
 
-    // Create Mat from slice and reshape to (h, w, 3)
-    let mut mat = Mat::from_slice(data).map_err(|e| e.to_string())?;
-    mat = mat.reshape(3, h).map_err(|e| format!("reshape failed: {}", e))?;
-
-    // Convert to gray
-    let mut gray = Mat::default();
-    imgproc::cvt_color(&mat, &mut gray, imgproc::COLOR_BGR2GRAY, 0).map_err(|e| e.to_string())?;
-
-    // Blur + Canny
-    let mut blurred = Mat::default();
-    imgproc::gaussian_blur(
-        &gray,
-        &mut blurred,
-        core::Size::new(5, 5),
-        1.5,
-        1.5,
-        core::BORDER_DEFAULT as i32,
-    )
-    .map_err(|e| e.to_string())?;
-
-    let mut edges = Mat::default();
-    imgproc::canny(&blurred, &mut edges, 50.0, 150.0, 3, false).map_err(|e| e.to_string())?;
-
-    // ROI mask (trapezoid)
-    let mut mask = Mat::zeros(h, w, core::CV_8U).map_err(|e| e.to_string())?;
-    let pts = types::VectorOfPoint::from_iter(vec![
-        core::Point::new((w as f32 * 0.1) as i32, h),
-        core::Point::new((w as f32 * 0.4) as i32, (h as f32 * 0.6) as i32),
-        core::Point::new((w as f32 * 0.6) as i32, (h as f32 * 0.6) as i32),
-        core::Point::new((w as f32 * 0.9) as i32, h),
-    ]);
-    let mut pts_vec = types::VectorOfVectorOfPoint::new();
-    pts_vec.push(pts);
-    imgproc::fill_poly(&mut mask, &pts_vec, core::Scalar::all(255.0), imgproc::LINE_8, 0, core::Point::new(0, 0)).map_err(|e| e.to_string())?;
-
-    let mut masked = Mat::default();
-    core::bitwise_and(&edges, &mask, &mut masked, &Mat::default()).map_err(|e| e.to_string())?;
-
-    // HoughLinesP with reusable buffer
-    LINES_BUF.with(|buf| {
-        let mut lines = buf.borrow_mut();
-        lines.clear();
-
-        let rho = 1.0;
-        let theta = std::f64::consts::PI / 180.0;
-        let threshold = 40;
-        let min_line_length = 30.0;
-        let max_line_gap = 20.0;
-
-        imgproc::hough_lines_p(&masked, &mut *lines, rho, theta, threshold, min_line_length, max_line_gap).map_err(|e| e.to_string())?;
-
-        let mut left_lines: Vec<(f64, f64, f64, f64)> = Vec::new();
-        let mut right_lines: Vec<(f64, f64, f64, f64)> = Vec::new();
-
-        for i in 0..lines.len() {
-            if let Ok(seg) = lines.get(i) {
-                if seg.len() >= 4 {
-                    let x1 = seg[0] as f64;
-                    let y1 = seg[1] as f64;
-                    let x2 = seg[2] as f64;
-                    let y2 = seg[3] as f64;
-                    if (x2 - x1).abs() < 1e-3 {
-                        continue;
-                    }
-                    let slope = (y2 - y1) / (x2 - x1);
-                    if slope.abs() < 0.3 {
-                        continue;
-                    }
-                    if slope < 0.0 {
-                        left_lines.push((x1, y1, x2, y2));
-                    } else {
-                        right_lines.push((x1, y1, x2, y2));
-                    }
-                }
+    for y in 0..height {
+        for x in 0..width {
+            if is_point_in_polygon((x, y), &vertices) {
+                let val = blurred.get_pixel(x, y).0[0];
+                roi.put_pixel(x, y, Luma([val]));
+            } else {
+                roi.put_pixel(x, y, Luma([0]));
             }
         }
-
-        let average_line = |segs: &Vec<(f64,f64,f64,f64)>| -> Option<(f64,f64,f64,f64)> {
-            if segs.is_empty() { return None; }
-            let mut sum_x1=0.0; let mut sum_y1=0.0; let mut sum_x2=0.0; let mut sum_y2=0.0; let mut total_w = 0.0;
-            for &(x1,y1,x2,y2) in segs.iter() {
-                let w = ((x2-x1).hypot(y2-y1)).max(1.0);
-                sum_x1 += x1 * w; sum_y1 += y1 * w; sum_x2 += x2 * w; sum_y2 += y2 * w; total_w += w;
-            }
-            Some((sum_x1/total_w, sum_y1/total_w, sum_x2/total_w, sum_y2/total_w))
-        };
-
-        let mut out: Vec<(f64,f64,f64,f64)> = Vec::new();
-        if let Some(l) = average_line(&left_lines) { out.push(l); }
-        if let Some(r) = average_line(&right_lines) { out.push(r); }
-        Ok(out)
-    })
+    }
+    roi
 }
 
+fn is_point_in_polygon(point: (u32, u32), vertices: &[(u32, u32); 4]) -> bool {
+    let (px, py) = point;
+    if py < vertices[2].1 || py > vertices[0].1 { return false; }
+    let height_span = (vertices[0].1 - vertices[3].1) as f32;
+    if height_span == 0.0 { return false; }
 
+    let progress = (py - vertices[3].1) as f32 / height_span;
+    let left_edge = vertices[3].0 as f32 + (vertices[0].0 as f32 - vertices[3].0 as f32) * progress;
+    let right_edge = vertices[2].0 as f32 + (vertices[1].0 as f32 - vertices[2].0 as f32) * progress;
+
+    (px as f32) >= left_edge && (px as f32) <= right_edge
+}
+
+/// Detects edges using Canny.
+fn detect_edges(roi: &GrayImage) -> GrayImage {
+    canny(roi, 50.0, 150.0)
+}
+
+/// Performs Hough transform with intelligent filtering and clipping.
+fn hough_transform(edges: &GrayImage) -> Vec<Line> {
+    // 1. Settings
+    let options = LineDetectionOptions {
+        suppression_radius: 10,
+        vote_threshold: 40, // Slightly lower to catch faint lines
+    };
+
+    // 2. Run Detection
+    let lines: Vec<PolarLine> = detect_lines(edges, options);
+    if lines.is_empty() { return vec![]; }
+
+    let mut left_lines: Vec<Line> = Vec::new();
+    let mut right_lines: Vec<Line> = Vec::new();
+    
+    // Define the "Horizon" (Stop lines 60% up the screen)
+    let y_bottom = edges.height() as f64;
+    let y_top = edges.height() as f64 * 0.6; 
+
+    for polar in lines {
+        let rho = polar.r; 
+        let theta_deg = polar.angle_in_degrees;
+        let theta_rad = (theta_deg as f64) * PI / 180.0;
+
+        // --- FILTERING ---
+        // 1. Reject Vertical lines (theta near 0 or 180)
+        if theta_rad < 0.1 || theta_rad > (PI - 0.1) { continue; }
+        
+        // 2. Reject Horizontal lines (theta near 90 deg / 1.57 rad)
+        // This removes the "Horizon" line cutting across the screen
+        if (theta_rad - PI / 2.0).abs() < 0.3 { continue; }
+
+        // --- CLIPPING (Make lines fit the road) ---
+        // Equation: x = (rho - y * sin(theta)) / cos(theta)
+        let x_bottom = (rho as f64 - y_bottom * theta_rad.sin()) / theta_rad.cos();
+        let x_top = (rho as f64 - y_top * theta_rad.sin()) / theta_rad.cos();
+
+        let line = (x_bottom, y_bottom, x_top, y_top);
+
+        // Group by slope
+        if theta_rad < PI / 2.0 {
+            right_lines.push(line);
+        } else {
+            left_lines.push(line);
+        }
+    }
+
+    // Return the strongest line for each side
+    let mut result = Vec::new();
+    if let Some(l) = left_lines.first() { result.push(*l); }
+    if let Some(r) = right_lines.first() { result.push(*r); }
+    
+    result
+}
+
+pub fn detect_lanes(frame: &ArrayView3<u8>) -> Result<Vec<Line>, String> {
+    let gray = bgr_to_gray(frame);
+    let blurred = apply_gaussian_blur(&gray);
+    let roi = apply_roi(&blurred, gray.width(), gray.height());
+    let edges = detect_edges(&roi);
+    let lines = hough_transform(&edges);
+    Ok(lines)
+}
