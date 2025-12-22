@@ -43,7 +43,7 @@ impl ObjectTracker{
 
             let mut best_match = None;
             let mut min_error = f64::MAX;
-
+            // Currently uses centroid matching as a robust method for building tracker
             for (id, old_obj) in &Self.Objects{
                 let (ox, oy, ow, oh) = old_obj.bbox;
                 let ocx = ox + ow / 2.0;
