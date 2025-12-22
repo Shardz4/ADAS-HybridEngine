@@ -2,8 +2,8 @@ use pyo3::prelude::*;
 use numpy::{IntoPyArray, PyArray2, PyReadonlyArray3}; // Fixed: Added missing imports
 use ndarray::{Array2, ArrayView3};
 use lane_detect::detect_lanes;
-
-// Fixed: Declare the module so Rust knows lane_detect.rs exists
+use object_proc::ObjectTracker;
+mod object_proc;
 mod lane_detect;
 
 #[pyfunction]
@@ -37,8 +37,31 @@ fn detect_lanes_rust<'py>(
     Ok(py_array)
 }
 
+#[pyclass]
+struct Rusttracker{
+    inner: ObjectTracker,
+}
+
+#[pymethods]
+impl RustTracker{
+    #[new]
+    fn new() -> Self{
+        RustTracker{
+            inner: ObjectTracker::new()
+        }
+    }
+
+    fn process_frame(&mut self, detections: Vec<(f64, f64, f64, f64)>, dt:f64) -> Vec<(uszie, f64, f64, f64, f64, f64, f64, f64)> {
+        let results = self.inner.process_frame(detections, dt);
+        results.into_iter().map(|o| {
+            (o.id, o.bbox.0, o.bbox.1, o.bbox.2, o.bbox.3, o.distance, o.speed, o.collisiontime)
+        }).collect()
+    }
+}
+
 #[pymodule]
 fn adas_pilot(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> { // Fixed: Updated signature to remove warning
     m.add_function(wrap_pyfunction!(detect_lanes_rust, m)?)?;
+    m.add_class:<RustTracker>()?;
     Ok(())
 }
