@@ -5,93 +5,100 @@ import adas_pilot  # Compiled Rust library
 from ultralytics import YOLO
 
 def main():
-
-    print("Loading YOLOv8 model..")
-    model = YOLO("assets/models/yolov8n.pt")
-
-
+    # 1. Load YOLOv8 Model
+    print("Loading YOLOv8 model...")
+    # model = YOLO('models/yolov8n.pt') 
+    model = YOLO('yolov8n.pt') 
+    
+    # 2. Initialize the Rust Tracker (Week 2)
     tracker = adas_pilot.RustTracker()
-    cap = cv2.VideoCapture("assets/videos/project_video.mp4")
+    
+    # 3. Setup Video Capture
+    video_path = "assets/videos/project_video.mp4"
+    cap = cv2.VideoCapture(video_path)
+    
     if not cap.isOpened():
-        print("Error: Could not open video file. Ensure 'highway.mp4' is in assets/videos/.")
+        print(f"Error: Could not open video at {video_path}")
         return
+
+    # INITIALIZE TIME HERE to fix NameError
+    prev_time = time.time()
 
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
-
-        # Resize for consistent processing (1280x720)
+        
+        # Resize for consistent processing
         frame = cv2.resize(frame, (1280, 720))
+        
+        # Calculate Delta Time (dt) for Rust Physics
         current_time = time.time()
         dt = current_time - prev_time
+        prev_time = current_time
+        
+        # Ensure dt isn't zero to avoid division by zero in Rust
+        if dt <= 0: dt = 0.033 
 
-        # Call Rust for lane detection
+        # --- WEEK 1: LANE DETECTION (RUST) ---
         try:
             lines = adas_pilot.detect_lanes_rust(frame)
-            if lines.shape[0] >= 2:  # Expect at least 2 lines (left, right)
-                for i in range(min(2, lines.shape[0])):
-                    x1, y1, x2, y2 = map(int, lines[i])
-                    cv2.line(frame, (x1, y1), (x2, y2), (0, 255, 0), 10)
-        except Exception as e:
+            for i in range(lines.shape[0]):
+                x1, y1, x2, y2 = map(int, lines[i])
+                cv2.line(frame, (x1, y1), (x2, y2), (0, 255, 0), 3)
+        except Exception:
             pass
-        
-        # Object Detection
-        results = model(frame, verbose=False, classes =[2,3,5,7]) # classes: Car, bike, Bus, Truck
-        detections_for_rust =[]
 
+        # --- WEEK 2: OBJECT DETECTION (PYTHON/YOLO) ---
+        # Classes: 2: car, 3: motorcycle, 5: bus, 7: truck
+        results = model(frame, verbose=False, classes=[2, 3, 5, 7])
+        
+        detections_for_rust = []
         for result in results:
             for box in result.boxes:
-                x1,y1,x2,y2 = map(float, box.xyxy[0])
-                w = x2-x1
-                h = y2-y1
-                detections_for_rust.append((x1,y1,w,h))
+                # Get coordinates
+                x1, y1, x2, y2 = map(float, box.xyxy[0])
+                w = x2 - x1
+                h = y2 - y1
+                detections_for_rust.append((x1, y1, w, h))
 
-    #Tracking and collisontime calculation
-    #raw boxes to rst and obtain physics data
-    #tracked objects = [id, x, y, w, h , dist, speed, collisiontime)
-    
-    tracked_obj = tracker.process_frame(detections_for_rust, dt)
+        # --- WEEK 2: TRACKING & PHYSICS (RUST) ---
+        # Returns: (id, x, y, w, h, distance, speed, collisiontime)
+        tracked_objs = tracker.process_frame(detections_for_rust, dt)
 
-    #overlays
+        # --- TRAFFIC LIGHT VISUALIZATION ---
+        for obj in tracked_objs:
+            oid, x, y, w, h, dist, speed, ttc = obj
+            
+            # Default: GREEN (Safe)
+            color = (0, 255, 0)
+            status = "SAFE"
+            
+            # YELLOW: Close (< 20m) or moderately fast approach (< 5s TTC)
+            if ttc < 5.0 or dist < 20.0:
+                color = (0, 255, 255)
+                status = "CAUTION"
+            
+            # RED: Danger (< 2.5s TTC)
+            if ttc < 2.5:
+                color = (0, 0, 255)
+                status = "BRAKE!"
 
-    for obj in tracked_obj:
-        oid, x, y, w, h, dist, speed, collisiontime = obj
+            # Draw Bounding Box
+            cv2.rectangle(frame, (int(x), int(y)), (int(x+w), int(y+h)), color, 2)
+            
+            # Draw Status Tag
+            cv2.putText(frame, f"ID {oid}: {status}", (int(x), int(y)-10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+            
+            # Draw Distance and TTC beneath the box
+            metrics = f"{dist:.1f}m | {ttc:.1f}s"
+            cv2.putText(frame, metrics, (int(x), int(y+h)+20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-        #warning system
-        #Green: Safe
-        color = (0,255,0)
-        status = "SAFE"
-        thickness = 2
-
-        #Yellow: Caution
-
-        if collisiontime < 5.0 or dist< 20.0:
-            color = (0,255,255)
-            status = "CAUTION"
-            thickness = 2
-
-        #Red: Danger
-
-        if collisiontime < 2.5:
-            color - (0,0,255)
-            status = "DANGER"
-            thickness = 4
-
-        cv2.rectangle(frame, (int(x), int(y)), (int(x+w), int(y+h)), color, thickness)
-
-        cv2.rectangle(frame, (int(x), int(y)-20), (int(x) + 120, int(y)), color, -1)
-
-        cv2.putText(frame, f"{status}", (int(x)+5, int(y)-5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,0),2)
-
-        label = f"{dist:.1f}m {speed:.1f}km/h {collisiontime:.1f}s"
-
-        if collisiontime > 50:
-            label = f"{dist:.1f}m {speed:.1f}km/h --.-s"
-        cv2.putText(frame, label, (int(x), int(y+h)+20),cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-
-        cv2.imshow('ADAS Pilot - Week 2: Lane + object', frame)
-        if cv2.waitKey(30) & 0xFF == ord('q'):  # 30 FPS
+        cv2.imshow('ADAS Pilot - Week 2: Object Detection & TTC', frame)
+        
+        if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
     cap.release()
