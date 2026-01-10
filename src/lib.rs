@@ -4,9 +4,11 @@ use ndarray::{Array2, ArrayView3};
 
 mod object_proc;
 mod lane_detect;
+mod lane_manager;
 
 use lane_detect::detect_lanes;
 use object_proc::ObjectTracker;
+use lane_manager::LaneManager;
 
 #[pyfunction]
 fn detect_lanes_rust<'py>(
@@ -64,9 +66,36 @@ impl RustTracker {
     }
 }
 
+#[pyclass]
+struct RustLaneManager {
+    inner: LaneManager,
+}
+
+#[pymethods]
+impl RustLaneManager {
+    #[new]
+    #[pyo3(signature = (smoothing=0.6, is_two_way=false))]
+
+    fn new(smoothing: f64, is_two_way:bool) -> Self {
+        RustLaneManager {
+            inner: LaneManager:new(smoothing, is_two_way)
+        }
+    }
+
+    fn update_lanes(&mut self, raw_lines: Vec<(f64, f64, f64, f64)>, img_width:f64) -> ((f64, f64, f64, f64), (f64, f64, f64, f64)) {
+        let (l, r) = self.inner.update_lines(raw_lines, img_width);
+        (l.unwrap_or((0.0,0.0,0.0,0.0)), r.unwrap_or((0.0,0.0,0.0,0.0)))
+    }
+
+    fn filter_objects(&self, detections:Vec<(f64, f64, f64, f64)>) -> Vec<(f64, f64, f64, f64)> {
+        self.inner.filter_objects(detections)
+    }
+}
+
 #[pymodule]
 fn adas_pilot(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(detect_lanes_rust, m)?)?;
     m.add_class::<RustTracker>()?;
+    m.add_class::<RustLaneManager>()?;
     Ok(())
 }
