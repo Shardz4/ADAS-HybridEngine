@@ -1,105 +1,87 @@
 import cv2
 import numpy as np
 import time
-import adas_pilot  # Compiled Rust library
+import adas_pilot
 from ultralytics import YOLO
 
+# CONFIG
+IS_TWO_WAY_ROAD = False  
+
 def main():
-    # 1. Load YOLOv8 Model
-    print("Loading YOLOv8 model...")
-    # model = YOLO('models/yolov8n.pt') 
+    print("Loading YOLOv8...")
     model = YOLO('yolov8n.pt') 
     
-    # 2. Initialize the Rust Tracker (Week 2)
+    # 1. Tracker (Physics)
     tracker = adas_pilot.RustTracker()
     
-    # 3. Setup Video Capture
-    video_path = "assets/videos/project_video.mp4"
-    cap = cv2.VideoCapture(video_path)
+    # 2. Manager (Lanes + Zones)
+    # Handles smoothing AND "safe zone" logic in one place
+    manager = adas_pilot.RustLaneManager(smoothing=0.6, is_two_way=IS_TWO_WAY_ROAD)
     
-    if not cap.isOpened():
-        print(f"Error: Could not open video at {video_path}")
-        return
-
-    # INITIALIZE TIME HERE to fix NameError
+    cap = cv2.VideoCapture("assets/videos/highway.mp4")
     prev_time = time.time()
+
+    # Placeholders for drawing
+    active_left, active_right = None, None
 
     while cap.isOpened():
         ret, frame = cap.read()
-        if not ret:
-            break
-        
-        # Resize for consistent processing
+        if not ret: break
         frame = cv2.resize(frame, (1280, 720))
+        h, w, _ = frame.shape
         
-        # Calculate Delta Time (dt) for Rust Physics
-        current_time = time.time()
-        dt = current_time - prev_time
-        prev_time = current_time
-        
-        # Ensure dt isn't zero to avoid division by zero in Rust
-        if dt <= 0: dt = 0.033 
+        cur_time = time.time()
+        dt = cur_time - prev_time
+        prev_time = cur_time
+        if dt <= 0: dt = 0.033
 
-        # --- WEEK 1: LANE DETECTION (RUST) ---
+        # --- STEP 1: DETECT & SMOOTH LANES ---
         try:
-            lines = adas_pilot.detect_lanes_rust(frame)
-            for i in range(lines.shape[0]):
-                x1, y1, x2, y2 = map(int, lines[i])
-                cv2.line(frame, (x1, y1), (x2, y2), (0, 255, 0), 3)
-        except Exception:
-            pass
+            raw_lines_np = adas_pilot.detect_lanes_rust(frame)
+            raw_lines_list = [tuple(x) for x in raw_lines_np]
+            
+            # One call update lines in Rust.
+            # It stores the smooth lines internally for the next step.
+            l_tup, r_tup = manager.update_lanes(raw_lines_list, float(w))
+            
+            if l_tup != (0.,0.,0.,0.): active_left = l_tup
+            if r_tup != (0.,0.,0.,0.): active_right = r_tup
+        except: pass
 
-        # --- WEEK 2: OBJECT DETECTION (PYTHON/YOLO) ---
-        # Classes: 2: car, 3: motorcycle, 5: bus, 7: truck
+        # --- STEP 2: RAW YOLO ---
         results = model(frame, verbose=False, classes=[2, 3, 5, 7])
-        
-        detections_for_rust = []
+        raw_detections = []
         for result in results:
             for box in result.boxes:
-                # Get coordinates
                 x1, y1, x2, y2 = map(float, box.xyxy[0])
-                w = x2 - x1
-                h = y2 - y1
-                detections_for_rust.append((x1, y1, w, h))
+                raw_detections.append((x1, y1, x2-x1, y2-y1))
 
-        # --- WEEK 2: TRACKING & PHYSICS (RUST) ---
-        # Returns: (id, x, y, w, h, distance, speed, collisiontime)
-        tracked_objs = tracker.process_frame(detections_for_rust, dt)
+        # --- STEP 3: FILTER (Uses Internal Lines) ---
+        # No need to pass lines manually! The manager remembers them.
+        valid_detections = manager.filter_objects(raw_detections)
 
-        # --- TRAFFIC LIGHT VISUALIZATION ---
+        # --- STEP 4: TRACK ---
+        tracked_objs = tracker.process_frame(valid_detections, dt)
+
+        # --- DRAWING ---
+        if active_left:
+            color = (0, 255, 255) if IS_TWO_WAY_ROAD else (255, 0, 0)
+            cv2.line(frame, (int(active_left[0]), int(active_left[1])), (int(active_left[2]), int(active_left[3])), color, 3)
+        if active_right:
+            cv2.line(frame, (int(active_right[0]), int(active_right[1])), (int(active_right[2]), int(active_right[3])), (255, 0, 0), 3)
+
         for obj in tracked_objs:
             oid, x, y, w, h, dist, speed, ttc = obj
             
-            # Default: GREEN (Safe)
             color = (0, 255, 0)
-            status = "SAFE"
-            
-            # YELLOW: Close (< 20m) or moderately fast approach (< 5s TTC)
-            if ttc < 5.0 or dist < 20.0:
-                color = (0, 255, 255)
-                status = "CAUTION"
-            
-            # RED: Danger (< 2.5s TTC)
-            if ttc < 2.5:
-                color = (0, 0, 255)
-                status = "BRAKE!"
+            if ttc < 5.0 or dist < 20.0: color = (0, 255, 255)
+            if ttc < 2.5: color = (0, 0, 255)
 
-            # Draw Bounding Box
             cv2.rectangle(frame, (int(x), int(y)), (int(x+w), int(y+h)), color, 2)
-            
-            # Draw Status Tag
-            cv2.putText(frame, f"ID {oid}: {status}", (int(x), int(y)-10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-            
-            # Draw Distance and TTC beneath the box
-            metrics = f"{dist:.1f}m | {ttc:.1f}s"
-            cv2.putText(frame, metrics, (int(x), int(y+h)+20),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+            cv2.putText(frame, f"{dist:.1f}m", (int(x), int(y)-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-        cv2.imshow('ADAS Pilot - Week 2: Object Detection & TTC', frame)
-        
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+        cv2.imshow('ADAS Pilot - Unified Manager', frame)
+        if cv2.waitKey(1) & 0xFF == ord('q'): break
 
     cap.release()
     cv2.destroyAllWindows()
