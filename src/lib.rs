@@ -78,7 +78,7 @@ impl RustLaneManager {
 
     fn new(smoothing: f64, is_two_way:bool) -> Self {
         RustLaneManager {
-            inner: LaneManager:new(smoothing, is_two_way)
+            inner: LaneManager::new(smoothing, is_two_way)
         }
     }
 

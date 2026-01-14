@@ -8,7 +8,7 @@ pub enum RoadType {
 type Line = (f64, f64, f64, f64);
 
 pub struct LaneManager {
-    prev_left: Option<LIne>,
+    prev_left: Option<Line>,
     prev_right: Option<Line>,
     smoothing_factor: f64,
     road_type: RoadType,
@@ -21,7 +21,7 @@ impl LaneManager {
             prev_right: None,
             smoothing_factor: smoothing,
             road_type: if is_two_way {
-                RoadType::TwoWay
+                RoadType::Twoway
             } else {
                 RoadType::Highway
             },
@@ -34,7 +34,8 @@ impl LaneManager {
         if lines.is_empty() {
             return None;
         }
-        let (mut sx1, mut sx2, mut sx2, mut sy2) = (0.0, 0.0, 0.0, 0.0);
+        let count = lines.len() as f64;
+        let (mut sx1, mut sy1, mut sx2, mut sy2) = (0.0, 0.0, 0.0, 0.0);
 
         for l in lines {
             sx1 += l.0;
@@ -69,10 +70,10 @@ impl LaneManager {
         }
 
         if let Some(avg_l) = Self::average_lines(&lefts) {
-            self.prev_left = Some(Self::smooth(avg_l, self.prev_left, self.smoothing_factor));
+            self.prev_left = Some(Self::Smooth(avg_l, self.prev_left, self.smoothing_factor));
         }
         if let Some(avg_r) = Self::average_lines(&rights) {
-            self.prev_right = Some(Self::smooth(avg_r, self.prev_right, self.smoothing_factor));
+            self.prev_right = Some(Self::Smooth(avg_r, self.prev_right, self.smoothing_factor));
         }
 
         (self.prev_left, self.prev_right)
@@ -104,7 +105,7 @@ fn get_x_on_line(line: Line, y: f64) -> f64 {
 
             let (min_x, max_x) = match self.road_type {
                 RoadType::Highway => (lx - (width * 1.5), rx + (width * 1.5)),
-                RoadType::TwoWay => (lx - 10.0, rx + (width * 1.5)),
+                RoadType::Twoway => (lx - 10.0, rx + (width * 1.5)),
 
             };
 

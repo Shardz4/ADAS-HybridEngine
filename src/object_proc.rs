@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-const Focal_Length: f64 = 700.0;
-const Real_Car_width: f64 = 1.8; //Avg car width
+const FOCAL_LENGTH: f64 = 700.0;
+const REAL_CAR_WIDTH: f64 = 1.8; //Avg car width
 
 #[derive(Clone, Debug)]
 pub struct TrackedObject {
@@ -30,7 +30,7 @@ impl ObjectTracker {
         if bbox_width <= 1.0 {
             return 100.0;
         }
-        (Focal_Length * Real_Car_width) / bbox_width
+        (FOCAL_LENGTH * REAL_CAR_WIDTH) / bbox_width
     }
 
     pub fn process_frame(&mut self, detections: Vec<(f64, f64, f64, f64)>, dt: f64) -> Vec<TrackedObject> {
