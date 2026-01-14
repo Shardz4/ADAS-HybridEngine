@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 import time
-import os # Import OS to check file paths
+import os 
 import adas_pilot
 from ultralytics import YOLO
 
@@ -83,33 +83,55 @@ def main():
                 x1, y1, x2, y2 = map(float, box.xyxy[0])
                 raw_detections.append((x1, y1, x2-x1, y2-y1))
 
-        # --- STEP 3: FILTER ---
-        valid_detections = manager.filter_objects(raw_detections)
+        # --- STEP 3: FILTER + EGO CHECK ---
+        filtered_data = manager.filter_objects(raw_detections)
 
-        # --- STEP 4: TRACK ---
-        tracked_objs = tracker.process_frame(valid_detections, dt)
+        bboxes_only = []
+        ego_map = {} # map x coordinate to eqo status (hash)
 
-        # --- DRAWING ---
+        for (bbox, is_ego) in filtered_data:
+            bboxes_only.append(bbox)
+            ego_map[int(bbox[0])] = is_ego
+
+        # --- STEP 4: TRACKING ---
+        tracked_objs = tracker.process_frame(bboxes_only, dt)
+
+        # --- STEP 5: VISUALIZATION ---
+
         if active_left:
-            color = (0, 255, 255) if IS_TWO_WAY_ROAD else (255, 0, 0)
-            cv2.line(frame, (int(active_left[0]), int(active_left[1])), (int(active_left[2]), int(active_left[3])), color, 3)
+            c = (0,255,0) if IS_TWO_WAY_ROAD else (255,0,0)
+            cv2.line(frame, (int(active_left[0]), int(active_left[1])), (int(active_left[2]), int(active_left[3])), c, 3)
         if active_right:
-            cv2.line(frame, (int(active_right[0]), int(active_right[1])), (int(active_right[2]), int(active_right[3])), (255, 0, 0), 3)
-
+            cv2.line(frame, (int(active_right[0]), int(active_right[1])), (int(active_right[2]), int(active_right[3])), (255,0,0), 3)
+        
         for obj in tracked_objs:
-            oid, x, y, w, h, dist, speed, ttc = obj
-            color = (0, 255, 0)
-            if ttc < 5.0 or dist < 20.0: color = (0, 255, 255)
-            if ttc < 2.5: color = (0, 0, 255)
+            oid , x, y, w, h, dist, speed, ttc = obj
+
+            is_in_ego_lane = ego_map.get(int(x), False)
+
+            #--color--
+
+            color = (0,255,0)
+
+            if dist < 25.0 or (ttc < 5.0 and ttc >0):
+                color = (0 , 255, 255)
+
+            if is_in_ego_lane and (ttc < 2.5 and ttc > 0):
+                color = (0,0,255)
+            
             cv2.rectangle(frame, (int(x), int(y)), (int(x+w), int(y+h)), color, 2)
-            cv2.putText(frame, f"{dist:.1f}m", (int(x), int(y)-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+            label_text = f"{dist:.1f}m {speed:.1f}km/h {ttc:.1f}s"
+            cv2.putText(frame, label_text, (int(x), int(y)-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+            if ttc < 90:
+                cv2.putText(frame, f"TTC:{ttc:.1f}s", (int(x), int(y+h)+15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-        cv2.imshow('ADAS Pilot - Debug Mode', frame)
-        if cv2.waitKey(1) & 0xFF == ord('q'): break
-
+        cv2.imshow("ADAS Pilot", frame)
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            print("[DEBUG] 'q' pressed. Exiting loop.")
+            break
+    
     cap.release()
     cv2.destroyAllWindows()
-    print("[DEBUG] App finished.")
 
 if __name__ == "__main__":
     main()

@@ -87,8 +87,9 @@ impl RustLaneManager {
         (l.unwrap_or((0.0,0.0,0.0,0.0)), r.unwrap_or((0.0,0.0,0.0,0.0)))
     }
 
-    fn filter_objects(&self, detections:Vec<(f64, f64, f64, f64)>) -> Vec<(f64, f64, f64, f64)> {
-        self.inner.filter_objects(detections)
+    fn filter_objects(&self, detections:Vec<(f64, f64, f64, f64)>) -> Vec<((f64, f64, f64, f64), bool)> {
+        let results = self.inner.filter_objects(detections);
+        results.into_iter().map(|obj| (obj.bbox, obj.is_in_ego_lane)).collect()
     }
 }
 

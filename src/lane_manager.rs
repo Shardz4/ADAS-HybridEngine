@@ -5,7 +5,13 @@ pub enum RoadType {
     Twoway,
 }
 
+
 type Line = (f64, f64, f64, f64);
+
+pub struct LaneObject{
+    pub bbox: (f64, f64, f64,f64),
+    pub is_in_ego_lane: bool,
+}
 
 pub struct LaneManager {
     prev_left: Option<Line>,
@@ -79,38 +85,46 @@ impl LaneManager {
         (self.prev_left, self.prev_right)
     }
 
-fn get_x_on_line(line: Line, y: f64) -> f64 {
+    fn get_x_on_line(line: Line, y: f64) -> f64 {
         let (x1, y1, x2, y2) = line;
         if (y2 - y1).abs() < 0.1 { return x1; }
         let slope = (x2 - x1) / (y2 - y1);
         x1 + (y - y1) * slope
     }
 
-    pub fn filter_objects(&self, detections:Vec<Line>) -> Vec<Line> {
+    pub fn filter_objects(&self, detections:Vec<Line>) -> Vec<LaneObject> {
         if self.prev_left.is_none() || self.prev_right.is_none() {
-            return detections;
+            return detections.into_iter().map(|bbox| LaneObject{
+                bbox,
+                is_in_ego_lane: false,
+            }).collect();
         }
 
         let l_line = self.prev_left.unwrap();
         let r_line = self.prev_right.unwrap();
         let mut valid = Vec::new();
+
         for (x,y,w,h) in detections {
-            let obj_x = x + w / 2.0;
-            let obj_y = y + h;
+            let obj_cx = x + w / 2.0;
+            let obj_bottom = y + h;
 
-            let lx = Self::get_x_on_line(l_line, obj_y);
-            let rx = Self::get_x_on_line(r_line, obj_y);
+            let lx = Self::get_x_on_line(l_line, obj_bottom);
+            let rx = Self::get_x_on_line(r_line, obj_bottom);
 
-            let width = rx-lx;
+            let width = rx - lx;
+
+            let is_ego = obj_cx > (lx + 10.0) && obj_cx < (rx - 10.0);
 
             let (min_x, max_x) = match self.road_type {
-                RoadType::Highway => (lx - (width * 1.5), rx + (width * 1.5)),
-                RoadType::Twoway => (lx - 10.0, rx + (width * 1.5)),
-
+                RoadType::Highway => (lx - (width*1.5) , rx + (width*1.5)),
+                RoadType::Twoway => (lx - 10.0 , rx + (width*1.5) ),
             };
 
-            if obj_x >= min_x &&obj_x <= max_x {
-                valid.push((x, y , w, h));
+            if obj_cx >= min_x && obj_cx <= max_x {
+                valid.push(LaneObject{
+                    bbox: (x,y,w,h),
+                    is_in_ego_lane: is_ego,
+                });
             }
         }
         valid
