@@ -14,7 +14,7 @@ pub struct TrackedObject {
 }
 
 pub struct ObjectTracker {
-    pub nect_id: usize, // restored your name
+    pub nect_id: usize, 
     pub objects: HashMap<usize, TrackedObject>,
 }
 
@@ -22,11 +22,11 @@ impl ObjectTracker {
     pub fn new() -> Self {
         ObjectTracker {
             nect_id: 0,
-            objects: HashMap::new(), // Fixed typo: HasMap -> HashMap
+            objects: HashMap::new(),
         }
     }
 
-    fn calc_distancee(bbox_width: f64) -> f64 { // restored your name
+    fn calc_distancee(bbox_width: f64) -> f64 { 
         if bbox_width <= 1.0 {
             return 100.0;
         }
@@ -34,8 +34,7 @@ impl ObjectTracker {
     }
 
     pub fn process_frame(&mut self, detections: Vec<(f64, f64, f64, f64)>, dt: f64) -> Vec<TrackedObject> {
-        let mut new_objects: HashMap<usize, TrackedObject> = HashMap::new(); // Fixed typo: Hashmap -> HashMap
-        
+        let mut new_objects: HashMap<usize, TrackedObject> = HashMap::new(); 
         for (x, y, w, h) in detections {
             let cx = x + w / 2.0;
             let cy = y + h / 2.0;
@@ -50,7 +49,6 @@ impl ObjectTracker {
                 let ocx = ox + ow / 2.0;
                 let ocy = oy + oh / 2.0;
 
-                // Fixed syntax: (cx - ocx)
                 let error = (cx - ocx).powi(2) + (cy - ocy).powi(2);
 
                 if error < 10000.0 && error < min_error {
@@ -66,7 +64,7 @@ impl ObjectTracker {
                     let collisiontime = if speed > 0.1 {
                         current_dist / speed
                     } else {
-                        99.0 // Removed semicolon to allow assignment
+                        99.0 
                     };
 
                     new_objects.insert(id, TrackedObject {
@@ -74,7 +72,7 @@ impl ObjectTracker {
                         bbox: (x, y, w, h),
                         distance: current_dist,
                         speed,
-                        collisiontime, // Fixed period to comma
+                        collisiontime, 
                         lost_frames: 0,
                     });
                 }
@@ -82,14 +80,14 @@ impl ObjectTracker {
             } else {
                 // creating new_object
                 let id = self.nect_id; 
-                self.nect_id += 1; // Fixed increment syntax
+                self.nect_id += 1; 
 
                 new_objects.insert(id, TrackedObject {
                     id,
                     bbox: (x, y, w, h),
-                    distance: current_dist, // Corrected from curr_dist
+                    distance: current_dist, 
                     speed: 0.0,
-                    collisiontime: 99.0, // Corrected from ttc to match struct
+                    collisiontime: 99.0, 
                     lost_frames: 0,
                 });
             }
