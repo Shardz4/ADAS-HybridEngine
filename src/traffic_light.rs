@@ -28,7 +28,7 @@ pub fn detect_traffic_light(frame: &ArrayView3<u8>) -> LightStatus {
 
             // rgb to hsv conversion
             let max = r.max(g).max(b);
-            let min = r.min(g).min(b); /
+            let min = r.min(g).min(b); 
             let delta = max - min;
 
            

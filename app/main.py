@@ -64,6 +64,18 @@ def main():
         prev_time = cur_time
         if dt <= 0: dt = 0.033
 
+        # -- Traffic Lights check
+
+        light_status = adas_pilot.check_traffic_lights(frame)
+        light_color = (0,0,0)
+        if light_status == "RED" : light_color(0,0,255)
+        elif light_status == "YELLOW" : light_color = (0,255,255)
+        elif light_status == "GREEN" : light_color = (0,255,0)
+
+        if light_status != "NONE":
+            cv2.rectangle(frame, (20,20) , (250,80), (0,0,0), -1)
+            cv2.putText(frame, f"LIGHT: {light_status}", (30,65), cv2.FONT_HERSHEY_SIMPLEX, 1.2, light_color, 3)
+
         # --- STEP 1: DETECT & SMOOTH LANES ---
         try:
             raw_lines_np = adas_pilot.detect_lanes_rust(frame)
