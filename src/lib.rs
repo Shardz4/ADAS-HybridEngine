@@ -5,10 +5,12 @@ use ndarray::{Array2, ArrayView3};
 mod object_proc;
 mod lane_detect;
 mod lane_manager;
+mod traffic_light;
 
 use lane_detect::detect_lanes;
 use object_proc::ObjectTracker;
 use lane_manager::LaneManager;
+use traffic_light::{detect_traffic_light, LightStatus};
 
 #[pyfunction]
 fn detect_lanes_rust<'py>(
@@ -93,9 +95,23 @@ impl RustLaneManager {
     }
 }
 
+#[pyfunction]
+fn check_traffic_lights(frame: PyReadonlyArray3<'_, u8>) -> String{
+    let frame_view = frame.as_array();
+    let status = detect_traffic_light(&frame_view);
+
+    match status {
+        LightStatus::Red => "RED".to_string(),
+        LightStatus::Yellow=> "YELLOW".to_string(),
+        LightStatus::Green => "GREEN".to_string(),
+        LightStatus::None => "NONE".to_string(),
+    }
+}
+
 #[pymodule]
 fn adas_pilot(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(detect_lanes_rust, m)?)?;
+    m.add_function(wrap_pyfunction!(check_traffic_lights, m)?)?;
     m.add_class::<RustTracker>()?;
     m.add_class::<RustLaneManager>()?;
     Ok(())
