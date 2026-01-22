@@ -1,3 +1,4 @@
+print("I AM ALIVE") # <--- Add this at line 1
 from ultralytics import YOLO
 import torch
 import os
@@ -9,7 +10,7 @@ def train():
 
     dataset_yaml= r"C:\Users\CREWMOBILE\Desktop\ADAS\adas_pilot\assets\datasets\data.yaml"
 
-    if not os.path,exists(dataset_yaml):
+    if not os.path.exists(dataset_yaml):
         raise FileNotFoundError(f"Dataset YAML file not found at {dataset_yaml}")
 
         model = YOLO('yolov8n.pt')
@@ -24,11 +25,11 @@ def train():
             batch = 8,
             patienece = 5,
             save = True,
-            save_period = 5
+            save_period = 5,
+            workers = 0
         )
 
         print("Exporting to ONNX format...")
         model.export(format = 'onnx', dynamic = false)
         
-
-
+train()
