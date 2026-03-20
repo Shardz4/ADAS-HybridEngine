@@ -3,3 +3,5 @@
 /maturin.log
 /README.md.bak
 /assets/datasets/
+/app/adas_training
+/app/tools/export_model.py
