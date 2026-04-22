@@ -1,1 +1,3 @@
-test_vid.mp4test_vid.mp4
+# Ignore video files
+*.mp4
+test_vid.mp4
