@@ -2,34 +2,40 @@ import cv2
 import numpy as np
 import time
 import os 
-import adas_pilot
-import onnxruntime as ort
-from ultralytics import YOLO
 import threading
 import queue
+
+# AI Libraries
+import torch
+import onnxruntime as ort
+from ultralytics import YOLO
+
+# Your Custom Rust Engine
+import adas_pilot
 
 # ==========================================
 # CONFIGURATION
 # ==========================================
 IS_TWO_WAY_ROAD = False  
-AI_SKIP_FRAMES = 3  
+AI_SKIP_FRAMES = 3  # Run heavy AI every 3rd frame
 
+# Map your Indian traffic sign classes here
 SIGN_CLASSES = {
     52: "STOP",
-    # Add more later...
+    # 0: "SPEED_LIMIT_30",
+    # 1: "SPEED_LIMIT_50",
 }
 
 # ==========================================
-# NEW: MULTI-THREADED CAMERA PIPELINE
+# MULTI-THREADED CAMERA PIPELINE
 # ==========================================
 class ThreadedCamera:
+    """Runs the video decoding and resizing on a separate CPU core to unblock the main thread."""
     def __init__(self, src=0):
         self.cap = cv2.VideoCapture(src)
-        # Create a small waiting room (queue) for 5 frames
         self.q = queue.Queue(maxsize=5) 
         self.stopped = False
         
-        # Start the background thread!
         self.t = threading.Thread(target=self.update, args=())
         self.t.daemon = True
 
@@ -38,7 +44,6 @@ class ThreadedCamera:
         return self
 
     def update(self):
-        # This loop runs constantly in the background
         while not self.stopped:
             if not self.q.full():
                 ret, frame = self.cap.read()
@@ -46,15 +51,13 @@ class ThreadedCamera:
                     self.stop()
                     return
                 
-                # We move the resizing to the background thread to free up the Main CPU!
+                # Resize on the background thread to save CPU cycles on the main thread
                 frame = cv2.resize(frame, (1280, 720))
                 self.q.put(frame)
             else:
-                # If the waiting room is full, rest for a millisecond
                 time.sleep(0.001) 
 
     def read(self):
-        # The main thread just grabs the next ready frame instantly
         return self.q.get()
 
     def more(self):
@@ -69,36 +72,49 @@ class ThreadedCamera:
 # MAIN DASHBOARD
 # ==========================================
 def main():
-    print("--- Starting ADAS Master Suite (Multi-Threaded) ---")
+    print("--- Starting ADAS Master Suite (Hardware Accelerated) ---")
     
+    # ------------------------------------------
+    # 1. LOAD PYTORCH YOLO MODEL & WARMUP
+    # ------------------------------------------
     print("[DEBUG] Loading YOLOv8 model for vehicles...")
     try:
         model = YOLO('yolov8n.pt')
-        print("[DEBUG] Vehicle Model loaded successfully.")
+        model.to('cuda') # Force PyTorch to use the NVIDIA GPU
+        
+        print("[DEBUG] Warming up GPU VRAM...")
+        # Send a dummy frame to force VRAM allocation before the video starts
+        dummy_frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+        model(dummy_frame, verbose=False)
+        print("[DEBUG] Vehicle Model loaded and VRAM Locked!")
     except Exception as e:
-        print(f"[ERROR] Failed to load YOLO: {e}")
+        print(f"[ERROR] Failed to load YOLO to GPU: {e}")
         return
 
+    # ------------------------------------------
+    # 2. LOAD RUST SUBSYSTEMS & ONNX
+    # ------------------------------------------
     print("[DEBUG] Initializing Rust modules...")
     try:
         tracker = adas_pilot.RustTracker()
         manager = adas_pilot.RustLaneManager(smoothing=0.6, is_two_way=IS_TWO_WAY_ROAD)
         brain = adas_pilot.AdasBrain("../models/traffic_signs.onnx") 
         print(f"[DEBUG] ONNX Execution Providers: {ort.get_available_providers()}")
+        print("[DEBUG] Rust modules and ONNX Brain initialized.")
     except Exception as e:
         print(f"[ERROR] Failed to initialize Rust modules: {e}")
         return
 
+    # ------------------------------------------
+    # 3. START VIDEO STREAM
+    # ------------------------------------------
     video_path = "../assets/videos/test_vid.mp4" 
     if not os.path.exists(video_path):
-        video_path = "test_video.mp4"
+        video_path = "test_video.mp4" # Fallback to local directory
 
     print(f"[DEBUG] Opening multi-threaded stream: {video_path}")
-    
-    # Start our new threaded camera!
     stream = ThreadedCamera(video_path).start()
-    # Give the background thread a second to fill the waiting room
-    time.sleep(1.0) 
+    time.sleep(1.0) # Give the buffer a second to fill
 
     if not stream.more():
         print("[ERROR] Failed to open the video file.")
@@ -106,6 +122,7 @@ def main():
 
     print("[DEBUG] Streaming live... Press 'q' to quit.")
     
+    # State variables
     prev_time = time.time()
     frame_count = 0
     active_left, active_right = None, None
@@ -113,7 +130,9 @@ def main():
     last_sign_detections = []
     last_raw_yolo_detections = []
 
-    # Loop while the background thread is still finding frames
+    # ------------------------------------------
+    # 4. MAIN INFERENCE LOOP
+    # ------------------------------------------
     while stream.more():
         frame = stream.read()
         frame_count += 1
@@ -124,9 +143,7 @@ def main():
         prev_time = cur_time
         if dt <= 0: dt = 0.033
 
-        # ==========================================
-        # MEDIUM SUBSYSTEMS (Run Every 2nd Frame)
-        # ==========================================
+        # --- MEDIUM SUBSYSTEMS (Run Every 2nd Frame) ---
         if frame_count % 2 == 0:
             light_status = adas_pilot.check_traffic_lights(frame)
             try:
@@ -136,28 +153,34 @@ def main():
                 if l_tup != (0.,0.,0.,0.): active_left = l_tup
                 if r_tup != (0.,0.,0.,0.): active_right = r_tup
             except Exception:
-                pass
+                pass # Suppress lane warnings in production
 
-        # ==========================================
-        # HEAVY AI SUBSYSTEMS (Run Every N Frames)
-        # ==========================================
+        # --- HEAVY AI SUBSYSTEMS (Run Every N Frames) ---
         if frame_count % AI_SKIP_FRAMES == 0:
+            
+            # A. Traffic Signs (Rust ONNX)
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             try:
                 last_sign_detections = brain.process_frame(rgb_frame.tobytes(), w, h, 0.40)
             except Exception:
                 pass
-
-            results = model(frame, device='0', half=True, verbose=False, classes=[2, 3, 5, 7])
+            # B. Vehicles (PyTorch YOLO)
+            results = model(frame, verbose=False, classes=[2, 3, 5, 7])
             last_raw_yolo_detections = []
             for result in results:
                 for box in result.boxes:
                     x1, y1, x2, y2 = map(float, box.xyxy[0])
+                    
+                    # --- ADD THIS EGO MASK ---
+                    # If the bottom of the bounding box (y2) is in the lowest 100 pixels 
+                    # of the screen, it's our own hood. Ignore it!
+                    if y2 > (h - 100):
+                        continue
+                    # -------------------------
+                    
                     last_raw_yolo_detections.append((x1, y1, x2-x1, y2-y1))
 
-        # ==========================================
-        # TRACKER (Run Every Frame)
-        # ==========================================
+        # --- TRACKER (Run Every Frame) ---
         filtered_data = manager.filter_objects(last_raw_yolo_detections)
         bboxes_only = []
         ego_map = {} 
@@ -167,15 +190,18 @@ def main():
 
         tracked_objs = tracker.process_frame(bboxes_only, dt)
 
-        # ==========================================
-        # VISUALIZATION HUD
-        # ==========================================
+        # ------------------------------------------
+        # 5. VISUALIZATION HUD
+        # ------------------------------------------
+        
+        # Draw Lanes
         if active_left:
             c = (0,255,0) if IS_TWO_WAY_ROAD else (255,0,0)
             cv2.line(frame, (int(active_left[0]), int(active_left[1])), (int(active_left[2]), int(active_left[3])), c, 3)
         if active_right:
             cv2.line(frame, (int(active_right[0]), int(active_right[1])), (int(active_right[2]), int(active_right[3])), (255,0,0), 3)
         
+        # Draw Traffic Lights
         light_color = (255, 255, 255) 
         if light_status == "RED": light_color = (0,0,255)
         elif light_status == "YELLOW": light_color = (0,255,255)
@@ -185,6 +211,7 @@ def main():
             cv2.rectangle(frame, (20,20) , (250,80), (0,0,0), -1)
             cv2.putText(frame, f"LIGHT: {light_status}", (30,65), cv2.FONT_HERSHEY_SIMPLEX, 1.2, light_color, 3)
 
+        # Draw Tracked Vehicles
         for obj in tracked_objs:
             oid, x, y, bw, bh, dist, speed, ttc = obj
             is_in_ego_lane = ego_map.get(int(x), False)
@@ -197,6 +224,7 @@ def main():
             label_text = f"{dist:.1f}m {speed:.1f}km/h"
             cv2.putText(frame, label_text, (int(x), int(y)-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
+        # Draw Traffic Signs
         for det in last_sign_detections:
             sx1, sy1, sx2, sy2 = map(int, det["bbox"])
             c_id = det["class_id"]
@@ -210,9 +238,11 @@ def main():
             cv2.rectangle(frame, (sx1, sy1 - 20), (sx1 + tw, sy1), (255, 0, 255), -1)
             cv2.putText(frame, text, (sx1, sy1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
+        # Draw FPS Counter
         fps = 1.0 / dt if dt > 0 else 0
         cv2.putText(frame, f"FPS: {fps:.1f}", (w - 150, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
 
+        # Render
         cv2.imshow("ADAS Pilot - Full Integration", frame)
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
