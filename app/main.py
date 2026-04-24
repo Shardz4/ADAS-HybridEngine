@@ -89,7 +89,7 @@ def main():
         print(f"[ERROR] Failed to initialize Rust modules: {e}")
         return
 
-    video_path = "../assets/videos/project_video.mp4" 
+    video_path = "../assets/videos/test_vid.mp4" 
     if not os.path.exists(video_path):
         video_path = "test_video.mp4"
 
