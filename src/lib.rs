@@ -13,20 +13,18 @@ mod lane_detect;
 mod lane_manager;
 mod traffic_light;
 
-use lane_detect::detect_lanes;
 use object_proc::ObjectTracker;
-use lane_manager::LaneManager;
 use traffic_light::{detect_traffic_light, LightStatus};
 
 #[pyfunction]
-fn detect_lanes_rust<'py>(
+fn detect_lanes<'py>(
     py: Python<'py>,
     frame: PyReadonlyArray3<'_, u8>,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let frame_view: ArrayView3<u8> = frame.as_array();
     
     // Call our "Pure Rust" lane detection
-    let lines = detect_lanes(&frame_view).map_err(|e| {
+    let lines = lane_detect::detect_lanes(&frame_view).map_err(|e| {
         pyo3::exceptions::PyValueError::new_err(format!("Lane detection failed: {}", e))
     })?;
 
@@ -49,15 +47,15 @@ fn detect_lanes_rust<'py>(
 }
 
 #[pyclass]
-struct RustTracker {
+struct Tracker {
     inner: ObjectTracker,
 }
 
 #[pymethods]
-impl RustTracker {
+impl Tracker {
     #[new]
     fn new() -> Self {
-        RustTracker {
+        Tracker {
             inner: ObjectTracker::new()
         }
     }
@@ -75,17 +73,17 @@ impl RustTracker {
 }
 
 #[pyclass]
-struct RustLaneManager {
-    inner: LaneManager,
+struct LaneManager {
+    inner: lane_manager::LaneManager,
 }
 
 #[pymethods]
-impl RustLaneManager {
+impl LaneManager {
     #[new]
     #[pyo3(signature = (smoothing=0.6, is_two_way=false))]
     fn new(smoothing: f64, is_two_way:bool) -> Self {
-        RustLaneManager {
-            inner: LaneManager::new(smoothing, is_two_way)
+        LaneManager {
+            inner: lane_manager::LaneManager::new(smoothing, is_two_way)
         }
     }
 
@@ -156,7 +154,7 @@ impl AdasBrain {
     }
 
     pub fn process_frame(
-        &self,
+        &mut self,
         py: Python,
         frame_bytes: &[u8],
         orig_width: u32,
@@ -184,8 +182,8 @@ impl AdasBrain {
         let input_tensor = Tensor::from_array((shape, input_data))
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
-        let outputs = self.session.run(inputs!["images" => input_tensor]
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?)
+        let model_inputs = inputs!["images" => input_tensor];
+        let outputs = self.session.run(model_inputs)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
         let (_output_shape, output_data) = outputs[0].try_extract_tensor::<f32>()
@@ -259,10 +257,10 @@ impl AdasBrain {
 
 #[pymodule]
 fn adas_pilot(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(detect_lanes_rust, m)?)?;
+    m.add_function(wrap_pyfunction!(detect_lanes, m)?)?;
     m.add_function(wrap_pyfunction!(check_traffic_lights, m)?)?;
-    m.add_class::<RustTracker>()?;
-    m.add_class::<RustLaneManager>()?;
+    m.add_class::<Tracker>()?;
+    m.add_class::<LaneManager>()?;
     
     m.add_class::<AdasBrain>()?;
     

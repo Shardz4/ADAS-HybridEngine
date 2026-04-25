@@ -96,8 +96,8 @@ def main():
     # ------------------------------------------
     print("[DEBUG] Initializing Rust modules...")
     try:
-        tracker = adas_pilot.RustTracker()
-        manager = adas_pilot.RustLaneManager(smoothing=0.6, is_two_way=IS_TWO_WAY_ROAD)
+        tracker = adas_pilot.Tracker()
+        manager = adas_pilot.LaneManager(smoothing=0.6, is_two_way=IS_TWO_WAY_ROAD)
         brain = adas_pilot.AdasBrain("../models/traffic_signs.onnx") 
         print(f"[DEBUG] ONNX Execution Providers: {ort.get_available_providers()}")
         print("[DEBUG] Rust modules and ONNX Brain initialized.")
@@ -147,7 +147,7 @@ def main():
         if frame_count % 2 == 0:
             light_status = adas_pilot.check_traffic_lights(frame)
             try:
-                raw_lines_np = adas_pilot.detect_lanes_rust(frame)
+                raw_lines_np = adas_pilot.detect_lanes(frame)
                 raw_lines_list = [tuple(x) for x in raw_lines_np]
                 l_tup, r_tup = manager.update_lanes(raw_lines_list, float(w))
                 if l_tup != (0.,0.,0.,0.): active_left = l_tup

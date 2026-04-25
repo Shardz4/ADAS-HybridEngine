@@ -52,7 +52,7 @@ impl LaneManager {
         Some((sx1/count, sy1/count, sx2/count, sy2/count))
     }
 
-    fn Smooth(new_l: Line, old_l: Option<Line>, alpha: f64) -> Line {
+    fn smooth(new_l: Line, old_l: Option<Line>, alpha: f64) -> Line {
         if let Some(old) = old_l {
             (
                 new_l.0 * alpha + old.0 * (1.0 - alpha),
@@ -76,10 +76,10 @@ impl LaneManager {
         }
 
         if let Some(avg_l) = Self::average_lines(&lefts) {
-            self.prev_left = Some(Self::Smooth(avg_l, self.prev_left, self.smoothing_factor));
+            self.prev_left = Some(Self::smooth(avg_l, self.prev_left, self.smoothing_factor));
         }
         if let Some(avg_r) = Self::average_lines(&rights) {
-            self.prev_right = Some(Self::Smooth(avg_r, self.prev_right, self.smoothing_factor));
+            self.prev_right = Some(Self::smooth(avg_r, self.prev_right, self.smoothing_factor));
         }
 
         (self.prev_left, self.prev_right)
