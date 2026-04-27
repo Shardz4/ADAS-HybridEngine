@@ -130,23 +130,23 @@ pub struct AdasBrain {
 impl AdasBrain {
     #[new]
         pub fn new(model_path: &str, light_model_path: &str) -> PyResult<Self> {
+            let build_session = |path: &str| -> ort::Result<Session> {
+            Session::builder()?
+                 .with_optimization_level(GraphOptimizationLevel::Level3)?
+                .with_execution_providers([ort::execution_providers::CUDAExecutionProvider::default().build()])?
+                .commit_from_file(path)
+            };
+
+       
+            let session = build_session(model_path)
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Sign Model Error: {}", e)))?;
+
         
-        // 1. Traffic Sign Engine
-            let session = Session::builder()
-                .and_then(|b| b.with_optimization_level(GraphOptimizationLevel::Level3))
-                .and_then(|b| b.with_execution_providers([ort::CUDAExecutionProvider::default().build()]))
-                .and_then(|b| b.commit_from_file(model_path))
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Failed to load Traffic Sign ONNX: {}", e)))?;
+            let light_session = build_session(light_model_path)
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Light Model Error: {}", e)))?;
 
-        // 2. Traffic Light Engine
-            let light_session = Session::builder()
-                .and_then(|b| b.with_optimization_level(GraphOptimizationLevel::Level3))
-                .and_then(|b| b.with_execution_providers([ort::CUDAExecutionProvider::default().build()]))
-                .and_then(|b| b.commit_from_file(light_model_path))
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Failed to load Traffic Light ONNX: {}", e)))?;
-
-        Ok(AdasBrain { session, light_session })
-    }
+            Ok(AdasBrain { session, light_session })
+        }
 
     pub fn process_frame(
         &mut self,
@@ -253,7 +253,6 @@ impl AdasBrain {
 #[pymodule]
 fn adas_pilot(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(detect_lanes, m)?)?;
-    m.add_function(wrap_pyfunction!(check_traffic_lights, m)?)?;
     m.add_class::<Tracker>()?;
     m.add_class::<LaneManager>()?;
     
