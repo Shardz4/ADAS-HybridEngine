@@ -98,18 +98,6 @@ impl LaneManager {
     }
 }
 
-#[pyfunction]
-fn check_traffic_lights(frame: PyReadonlyArray3<'_, u8>) -> String{
-    let frame_view = frame.as_array();
-    let status = detect_traffic_light(&frame_view);
-
-    match status {
-        LightStatus::Red => "RED".to_string(),
-        LightStatus::Yellow=> "YELLOW".to_string(),
-        LightStatus::Green => "GREEN".to_string(),
-        LightStatus::None => "NONE".to_string(),
-    }
-}
 
 
 #[derive(Debug, Clone)]
