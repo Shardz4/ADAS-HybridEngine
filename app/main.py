@@ -156,14 +156,16 @@ def main():
                 pass # Suppress lane warnings in production
 
         # --- HEAVY AI SUBSYSTEMS (Run Every N Frames) ---
-        if frame_count % AI_SKIP_FRAMES == 0:
-            
-            # A. Traffic Signs (Rust ONNX)
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        if frame_count % 2 == 0:
             try:
-                last_sign_detections = brain.process_frame(rgb_frame.tobytes(), w, h, 0.40)
-            except Exception:
+                raw_lines_np = adas_pilot.detect_lanes(frame)
+                raw_lines_list = [tuple(x) for x in raw_lines_np]
+                l_tup, r_tup = manager.update_lanes(raw_lines_list, float(w))
+                if l_tup != (0.,0.,0.,0.): active_left = l_tup
+                if r_tup != (0.,0.,0.,0.): active_right = r_tup
+            except:
                 pass
+            
             # B. Vehicles (PyTorch YOLO)
             results = model(frame, verbose=False, classes=[2, 3, 5, 7])
             last_raw_yolo_detections = []
