@@ -123,22 +123,29 @@ fn calculate_iou(box1: &[f32; 4], box2: &[f32; 4]) -> f32 {
 #[pyclass]
 pub struct AdasBrain {
     session: Session,
+    light_session: Session,
 }
 
 #[pymethods]
 impl AdasBrain {
     #[new]
-    pub fn new(model_path: &str) -> PyResult<Self> {
-        let _ = ort::init().with_name("adas_engine").commit();
+        pub fn new(model_path: &str, light_model_path: &str) -> PyResult<Self> {
+        
+        // 1. Traffic Sign Engine
+            let session = Session::builder()
+                .and_then(|b| b.with_optimization_level(GraphOptimizationLevel::Level3))
+                .and_then(|b| b.with_execution_providers([ort::CUDAExecutionProvider::default().build()]))
+                .and_then(|b| b.commit_from_file(model_path))
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Failed to load Traffic Sign ONNX: {}", e)))?;
 
-        let session = Session::builder()
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?
-            .with_optimization_level(GraphOptimizationLevel::Level3)
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?
-            .commit_from_file(model_path)
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Failed to load ONNX: {}", e)))?;
+        // 2. Traffic Light Engine
+            let light_session = Session::builder()
+                .and_then(|b| b.with_optimization_level(GraphOptimizationLevel::Level3))
+                .and_then(|b| b.with_execution_providers([ort::CUDAExecutionProvider::default().build()]))
+                .and_then(|b| b.commit_from_file(light_model_path))
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Failed to load Traffic Light ONNX: {}", e)))?;
 
-        Ok(AdasBrain { session })
+        Ok(AdasBrain { session, light_session })
     }
 
     pub fn process_frame(
