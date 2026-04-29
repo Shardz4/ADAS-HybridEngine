@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as f
+import torch.nn.functional as F
 
 class TrafficLightHead(nn.Module):
     def __init__(self):
@@ -16,20 +16,20 @@ class TrafficLightHead(nn.Module):
         self.fc1 = nn.Linear(64*4*8, 128)
         self.fc2 = nn.Linear(128, 4) 
 
-        def forward(self, x):
-            x = self.pool(F.relu(self.conv1(x)))
-            x = self.pool(F.relu(self.conv2(x)))
-            x = self.pool(F.relu(self.conv3(x)))
+    def forward(self, x):
+        x = self.pool(F.relu(self.conv1(x)))
+        x = self.pool(F.relu(self.conv2(x)))
+        x = self.pool(F.relu(self.conv3(x)))
 
-            x = x.view(-1, 64*4*8)
-            x = F.relu(self.fc1(x))
-            x =self.dropout(x)
-            s = self.fc2(x)
-            return x
+        x = x.view(-1, 64*4*8)
+        x = F.relu(self.fc1(x))
+        x = self.dropout(x)
+        x = self.fc2(x)
+        return x
 
 
 if __name__ == "__main__":
-    model =TrafficLightHead()
+    model = TrafficLightHead()
     dummy_crop = torch.randn(1, 3, 64, 32)
     output = model(dummy_crop)
     print(f"Model output: {output.shape}")

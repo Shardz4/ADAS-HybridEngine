@@ -5,7 +5,7 @@ from ultralytics import YOLO
 
 def main():
     output_dir = "../dataset/raw_lights"
-    os.markedirs(output_dir, exist_ok =True)
+    os.makedirs(output_dir, exist_ok=True)
     print(f"[INFO] Output Directory Created: {output_dir}")
 
     model  =YOLO('yolov8n.pt')
