@@ -46,6 +46,18 @@ fn detect_lanes<'py>(
     Ok(py_array)
 }
 
+#[pyfunction]
+fn check_traffic_lights(frame: PyReadonlyArray3<'_, u8>) -> String {
+    let frame_view: ArrayView3<u8> = frame.as_array();
+    let status = detect_traffic_light(&frame_view);
+    match status {
+        LightStatus::Red => "RED".to_string(),
+        LightStatus::Yellow => "YELLOW".to_string(),
+        LightStatus::Green => "GREEN".to_string(),
+        LightStatus::None => "NONE".to_string(),
+    }
+}
+
 #[pyclass]
 struct Tracker {
     inner: ObjectTracker,
@@ -253,6 +265,7 @@ impl AdasBrain {
 #[pymodule]
 fn adas_pilot(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(detect_lanes, m)?)?;
+    m.add_function(wrap_pyfunction!(check_traffic_lights, m)?)?;
     m.add_class::<Tracker>()?;
     m.add_class::<LaneManager>()?;
     

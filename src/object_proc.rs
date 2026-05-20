@@ -14,19 +14,19 @@ pub struct TrackedObject {
 }
 
 pub struct ObjectTracker {
-    pub nect_id: usize, 
+    pub next_id: usize, 
     pub objects: HashMap<usize, TrackedObject>,
 }
 
 impl ObjectTracker {
     pub fn new() -> Self {
         ObjectTracker {
-            nect_id: 0,
+            next_id: 0,
             objects: HashMap::new(),
         }
     }
 
-    fn calc_distancee(bbox_width: f64) -> f64 { 
+    fn calc_distance(bbox_width: f64) -> f64 { 
         if bbox_width <= 1.0 {
             return 100.0;
         }
@@ -38,7 +38,7 @@ impl ObjectTracker {
         for (x, y, w, h) in detections {
             let cx = x + w / 2.0;
             let cy = y + h / 2.0;
-            let current_dist = Self::calc_distancee(w);
+            let current_dist = Self::calc_distance(w);
 
             let mut best_match = None;
             let mut min_error = f64::MAX;
@@ -79,8 +79,8 @@ impl ObjectTracker {
                 self.objects.remove(&id);
             } else {
                 // creating new_object
-                let id = self.nect_id; 
-                self.nect_id += 1; 
+                let id = self.next_id; 
+                self.next_id += 1; 
 
                 new_objects.insert(id, TrackedObject {
                     id,
