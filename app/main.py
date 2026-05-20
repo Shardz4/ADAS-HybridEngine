@@ -129,6 +129,9 @@ def main():
     light_status = "NONE"
     last_sign_detections = []
     last_raw_yolo_detections = []
+    accumulated_dt = 0.0
+    tracked_objs = []
+    ego_map = {}
 
     # ------------------------------------------
     # 4. MAIN INFERENCE LOOP
@@ -142,10 +145,10 @@ def main():
         dt = cur_time - prev_time
         prev_time = cur_time
         if dt <= 0: dt = 0.033
+        accumulated_dt += dt
 
         # --- MEDIUM SUBSYSTEMS (Run Every 2nd Frame) ---
         if frame_count % 2 == 0:
-            light_status = adas_pilot.check_traffic_lights(frame)
             try:
                 raw_lines_np = adas_pilot.detect_lanes(frame)
                 raw_lines_list = [tuple(x) for x in raw_lines_np]
@@ -157,18 +160,57 @@ def main():
 
         # --- HEAVY AI SUBSYSTEMS (Run Every N Frames) ---
         if frame_count % AI_SKIP_FRAMES == 0:
-            # A. Vehicles (PyTorch YOLO)
-            results = model(frame, verbose=False, classes=[2, 3, 5, 7])
+            # A. Vehicles & Traffic Lights (PyTorch YOLO)
+            results = model(frame, verbose=False, classes=[2, 3, 5, 7, 9], agnostic_nms=True)
             last_raw_yolo_detections = []
+            
+            detected_lights = []
             for result in results:
                 for box in result.boxes:
+                    cls = int(box.cls[0])
                     x1, y1, x2, y2 = map(float, box.xyxy[0])
                     
-                    # Ego hood mask: ignore detections in the lowest 100 pixels
-                    if y2 > (h - 100):
-                        continue
-                    
-                    last_raw_yolo_detections.append((x1, y1, x2-x1, y2-y1))
+                    if cls == 9:
+                        # Traffic light: crop and classify using transfer learning model
+                        if box.conf[0] < 0.45:
+                            continue
+                        x1_i, y1_i, x2_i, y2_i = map(int, [x1, y1, x2, y2])
+                        x1_i = max(0, x1_i)
+                        y1_i = max(0, y1_i)
+                        x2_i = min(w, x2_i)
+                        y2_i = min(h, y2_i)
+                        
+                        crop = frame[y1_i:y2_i, x1_i:x2_i]
+                        if crop.size > 0:
+                            # Convert BGR to RGB for PyTorch/ONNX
+                            crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+                            try:
+                                status = brain.classify_light(
+                                    crop_rgb.tobytes(), crop_rgb.shape[1], crop_rgb.shape[0]
+                                )
+                                detected_lights.append(status)
+                            except Exception as e:
+                                pass
+                    else:
+                        # Vehicle classes [2, 3, 5, 7]
+                        # Ego hood mask: ignore detections in the lowest 100 pixels
+                        if y2 > (h - 100):
+                            continue
+                        last_raw_yolo_detections.append((x1, y1, x2-x1, y2-y1))
+            
+            # Decide final light status based on all detected traffic lights
+            if detected_lights:
+                # Prioritize RED, then YELLOW, then GREEN, then NONE
+                if "RED" in detected_lights:
+                    light_status = "RED"
+                elif "YELLOW" in detected_lights:
+                    light_status = "YELLOW"
+                elif "GREEN" in detected_lights:
+                    light_status = "GREEN"
+                else:
+                    light_status = "NONE"
+            else:
+                light_status = "NONE"
 
             # B. Traffic Signs (Rust ONNX Brain)
             try:
@@ -179,15 +221,16 @@ def main():
             except Exception:
                 pass
 
-        # --- TRACKER (Run Every Frame) ---
-        filtered_data = manager.filter_objects(last_raw_yolo_detections)
-        bboxes_only = []
-        ego_map = {} 
-        for (bbox, is_ego) in filtered_data:
-            bboxes_only.append(bbox)
-            ego_map[int(bbox[0])] = is_ego
+            # --- TRACKER (Run on AI frames with accumulated dt) ---
+            filtered_data = manager.filter_objects(last_raw_yolo_detections)
+            bboxes_only = []
+            ego_map = {} 
+            for (bbox, is_ego) in filtered_data:
+                bboxes_only.append(bbox)
+                ego_map[int(bbox[0])] = is_ego
 
-        tracked_objs = tracker.process_frame(bboxes_only, dt)
+            tracked_objs = tracker.process_frame(bboxes_only, accumulated_dt)
+            accumulated_dt = 0.0
 
         # ------------------------------------------
         # 5. VISUALIZATION HUD
