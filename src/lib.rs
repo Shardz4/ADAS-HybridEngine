@@ -256,6 +256,106 @@ impl AdasBrain {
 
         Ok(py_results.into())
     }
+
+    pub fn classify_light(
+        &mut self,
+        crop_bytes: &[u8],
+        width: u32,
+        height: u32,
+    ) -> PyResult<String> {
+        let expected = (width * height * 3) as usize;
+        if crop_bytes.len() != expected {
+            return Ok("NONE".to_string());
+        }
+
+        let mut red_count: u32 = 0;
+        let mut yellow_count: u32 = 0;
+        let mut green_count: u32 = 0;
+
+        let mut top_area: u32 = 0;
+        let mut mid_area: u32 = 0;
+        let mut bot_area: u32 = 0;
+
+        let h_f = height as f32;
+        let top_max = (h_f * 0.40) as u32;
+        let mid_min = (h_f * 0.30) as u32;
+        let mid_max = (h_f * 0.70) as u32;
+        let bot_min = (h_f * 0.60) as u32;
+
+        for y in 0..height {
+            for x in 0..width {
+                let idx = ((y * width + x) * 3) as usize;
+                let r = crop_bytes[idx] as f32;
+                let g = crop_bytes[idx + 1] as f32;
+                let b = crop_bytes[idx + 2] as f32;
+
+                // --- RGB to OpenCV-style HSV ---
+                let r_n = r / 255.0;
+                let g_n = g / 255.0;
+                let b_n = b / 255.0;
+
+                let max_c = r_n.max(g_n.max(b_n));
+                let min_c = r_n.min(g_n.min(b_n));
+                let delta = max_c - min_c;
+
+                let hue_deg = if delta == 0.0 {
+                    0.0
+                } else if max_c == r_n {
+                    60.0 * (((g_n - b_n) / delta) % 6.0)
+                } else if max_c == g_n {
+                    60.0 * (((b_n - r_n) / delta) + 2.0)
+                } else {
+                    60.0 * (((r_n - g_n) / delta) + 4.0)
+                };
+                let hue_deg = if hue_deg < 0.0 { hue_deg + 360.0 } else { hue_deg };
+                let h_cv = hue_deg / 2.0; // OpenCV Hue: 0..180
+                let s_cv = if max_c == 0.0 { 0.0 } else { (delta / max_c) * 255.0 };
+                let v_cv = max_c * 255.0;
+
+                // --- Zone checks ---
+                if y <= top_max {
+                    top_area += 1;
+                    // Red: H in [0,10] or [170,180], S>=70, V>=50
+                    if (h_cv <= 10.0 || h_cv >= 170.0) && s_cv >= 70.0 && v_cv >= 50.0 {
+                        red_count += 1;
+                    }
+                }
+
+                if y >= mid_min && y <= mid_max {
+                    mid_area += 1;
+                    // Yellow: H in [15,35], S>=70, V>=50
+                    if h_cv >= 15.0 && h_cv <= 35.0 && s_cv >= 70.0 && v_cv >= 50.0 {
+                        yellow_count += 1;
+                    }
+                }
+
+                if y >= bot_min {
+                    bot_area += 1;
+                    // Green: H in [35,95], S>=50, V>=50
+                    if h_cv >= 35.0 && h_cv <= 95.0 && s_cv >= 50.0 && v_cv >= 50.0 {
+                        green_count += 1;
+                    }
+                }
+            }
+        }
+
+        let r_pct = if top_area > 0 { red_count as f32 / top_area as f32 } else { 0.0 };
+        let y_pct = if mid_area > 0 { yellow_count as f32 / mid_area as f32 } else { 0.0 };
+        let g_pct = if bot_area > 0 { green_count as f32 / bot_area as f32 } else { 0.0 };
+
+        let mut best_pct = 0.0f32;
+        let mut best_label = "NONE";
+
+        if r_pct > best_pct { best_pct = r_pct; best_label = "RED"; }
+        if y_pct > best_pct { best_pct = y_pct; best_label = "YELLOW"; }
+        if g_pct > best_pct { best_pct = g_pct; best_label = "GREEN"; }
+
+        if best_pct >= 0.05 {
+            Ok(best_label.to_string())
+        } else {
+            Ok("NONE".to_string())
+        }
+    }
 }
 
 // ==========================================

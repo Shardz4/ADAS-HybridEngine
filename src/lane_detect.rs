@@ -27,39 +27,34 @@ fn apply_gaussian_blur(gray: &GrayImage) -> GrayImage {
 }
 
 /// Creates a trapezoidal ROI mask.
+/// Optimized: computes left/right trapezoid edges once per row instead of
+/// per-pixel polygon checks. Only touches pixels inside the active region.
 fn apply_roi(blurred: &GrayImage, width: u32, height: u32) -> GrayImage {
-    let mut roi = ImageBuffer::new(width, height);
-    let vertices: [(u32, u32); 4] = [
-        (0, height),                     // Bottom-left
-        (width, height),                 // Bottom-right
-        (width * 3 / 5, height * 3 / 5), // Top-right
-        (width * 2 / 5, height * 3 / 5), // Top-left
-    ];
+    let mut roi = ImageBuffer::new(width, height); // All pixels start at 0
 
-    for y in 0..height {
-        for x in 0..width {
-            if is_point_in_polygon((x, y), &vertices) {
+    // Trapezoid vertices
+    let bl = (0u32, height);                        // Bottom-left
+    let br = (width, height);                       // Bottom-right
+    let tr = (width * 3 / 5, height * 3 / 5);      // Top-right
+    let tl = (width * 2 / 5, height * 3 / 5);      // Top-left
+
+    let y_start = tr.1; // top of trapezoid
+    let y_end = bl.1;   // bottom of trapezoid
+    let height_span = (y_end - y_start) as f32;
+
+    if height_span > 0.0 {
+        for y in y_start..y_end {
+            let progress = (y - y_start) as f32 / height_span;
+            let left_x = (tl.0 as f32 + (bl.0 as f32 - tl.0 as f32) * progress) as u32;
+            let right_x = ((tr.0 as f32 + (br.0 as f32 - tr.0 as f32) * progress) as u32).min(width.saturating_sub(1));
+
+            for x in left_x..=right_x {
                 let val = blurred.get_pixel(x, y).0[0];
                 roi.put_pixel(x, y, Luma([val]));
-            } else {
-                roi.put_pixel(x, y, Luma([0]));
             }
         }
     }
     roi
-}
-
-fn is_point_in_polygon(point: (u32, u32), vertices: &[(u32, u32); 4]) -> bool {
-    let (px, py) = point;
-    if py < vertices[2].1 || py > vertices[0].1 { return false; }
-    let height_span = (vertices[0].1 - vertices[3].1) as f32;
-    if height_span == 0.0 { return false; }
-
-    let progress = (py - vertices[3].1) as f32 / height_span;
-    let left_edge = vertices[3].0 as f32 + (vertices[0].0 as f32 - vertices[3].0 as f32) * progress;
-    let right_edge = vertices[2].0 as f32 + (vertices[1].0 as f32 - vertices[2].0 as f32) * progress;
-
-    (px as f32) >= left_edge && (px as f32) <= right_edge
 }
 
 /// Detects edges using Canny.
