@@ -98,7 +98,7 @@ def main():
     try:
         tracker = adas_pilot.Tracker()
         manager = adas_pilot.LaneManager(smoothing=0.6, is_two_way=IS_TWO_WAY_ROAD)
-        brain = adas_pilot.AdasBrain("../models/traffic_signs.onnx") 
+        brain = adas_pilot.AdasBrain("../models/traffic_signs.onnx", "../models/traffic_lights_transfer.onnx") 
         print(f"[DEBUG] ONNX Execution Providers: {ort.get_available_providers()}")
         print("[DEBUG] Rust modules and ONNX Brain initialized.")
     except Exception as e:
@@ -156,31 +156,28 @@ def main():
                 pass # Suppress lane warnings in production
 
         # --- HEAVY AI SUBSYSTEMS (Run Every N Frames) ---
-        if frame_count % 2 == 0:
-            try:
-                raw_lines_np = adas_pilot.detect_lanes(frame)
-                raw_lines_list = [tuple(x) for x in raw_lines_np]
-                l_tup, r_tup = manager.update_lanes(raw_lines_list, float(w))
-                if l_tup != (0.,0.,0.,0.): active_left = l_tup
-                if r_tup != (0.,0.,0.,0.): active_right = r_tup
-            except:
-                pass
-            
-            # B. Vehicles (PyTorch YOLO)
+        if frame_count % AI_SKIP_FRAMES == 0:
+            # A. Vehicles (PyTorch YOLO)
             results = model(frame, verbose=False, classes=[2, 3, 5, 7])
             last_raw_yolo_detections = []
             for result in results:
                 for box in result.boxes:
                     x1, y1, x2, y2 = map(float, box.xyxy[0])
                     
-                    # --- ADD THIS EGO MASK ---
-                    # If the bottom of the bounding box (y2) is in the lowest 100 pixels 
-                    # of the screen, it's our own hood. Ignore it!
+                    # Ego hood mask: ignore detections in the lowest 100 pixels
                     if y2 > (h - 100):
                         continue
-                    # -------------------------
                     
                     last_raw_yolo_detections.append((x1, y1, x2-x1, y2-y1))
+
+            # B. Traffic Signs (Rust ONNX Brain)
+            try:
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                last_sign_detections = brain.process_frame(
+                    frame_rgb.tobytes(), w, h, 0.25
+                )
+            except Exception:
+                pass
 
         # --- TRACKER (Run Every Frame) ---
         filtered_data = manager.filter_objects(last_raw_yolo_detections)
