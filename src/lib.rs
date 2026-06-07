@@ -268,97 +268,56 @@ impl AdasBrain {
             return Ok("NONE".to_string());
         }
 
-        let mut red_count: u32 = 0;
-        let mut yellow_count: u32 = 0;
-        let mut green_count: u32 = 0;
+        // --- 1. Reconstruct image from raw RGB bytes ---
+        let img: ImageBuffer<Rgb<u8>, Vec<u8>> =
+            ImageBuffer::from_raw(width, height, crop_bytes.to_vec())
+                .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("Invalid crop dimensions"))?;
 
-        let mut top_area: u32 = 0;
-        let mut mid_area: u32 = 0;
-        let mut bot_area: u32 = 0;
+        // --- 2. Resize to model input size: 32w x 64h ---
+        let resized = image::imageops::resize(&img, 32, 64, FilterType::Triangle);
 
-        let h_f = height as f32;
-        let top_max = (h_f * 0.38) as u32;  // Red zone: top 38%
-        let mid_min = (h_f * 0.38) as u32;  // Yellow zone: 38%-65% (no overlap with red)
-        let mid_max = (h_f * 0.65) as u32;
-        let bot_min = (h_f * 0.62) as u32;  // Green zone: bottom 38%
+        // --- 3. Normalize to CHW float32 with ImageNet mean/std ---
+        const MEAN: [f32; 3] = [0.485, 0.456, 0.406];
+        const STD:  [f32; 3] = [0.229, 0.224, 0.225];
 
-        for y in 0..height {
-            for x in 0..width {
-                let idx = ((y * width + x) * 3) as usize;
-                let r = crop_bytes[idx] as f32;
-                let g = crop_bytes[idx + 1] as f32;
-                let b = crop_bytes[idx + 2] as f32;
-
-                // --- RGB to OpenCV-style HSV ---
-                let r_n = r / 255.0;
-                let g_n = g / 255.0;
-                let b_n = b / 255.0;
-
-                let max_c = r_n.max(g_n.max(b_n));
-                let min_c = r_n.min(g_n.min(b_n));
-                let delta = max_c - min_c;
-
-                let hue_deg = if delta == 0.0 {
-                    0.0
-                } else if max_c == r_n {
-                    60.0 * (((g_n - b_n) / delta) % 6.0)
-                } else if max_c == g_n {
-                    60.0 * (((b_n - r_n) / delta) + 2.0)
-                } else {
-                    60.0 * (((r_n - g_n) / delta) + 4.0)
-                };
-                let hue_deg = if hue_deg < 0.0 { hue_deg + 360.0 } else { hue_deg };
-                let h_cv = hue_deg / 2.0; // OpenCV Hue: 0..180
-                let s_cv = if max_c == 0.0 { 0.0 } else { (delta / max_c) * 255.0 };
-                let v_cv = max_c * 255.0;
-
-                // --- Zone checks ---
-                if y <= top_max {
-                    top_area += 1;
-                    // Red: H in [0,15] or [170,180], S>=70, V>=50
-                    // Widened upper bound to capture orange-reds that were bleeding into yellow
-                    if (h_cv <= 15.0 || h_cv >= 170.0) && s_cv >= 70.0 && v_cv >= 50.0 {
-                        red_count += 1;
-                    }
-                }
-
-                if y >= mid_min && y <= mid_max {
-                    mid_area += 1;
-                    // Yellow: H in [18,35], S>=70, V>=50
-                    // Narrowed lower bound to prevent red bleed-over
-                    if h_cv >= 18.0 && h_cv <= 35.0 && s_cv >= 70.0 && v_cv >= 50.0 {
-                        yellow_count += 1;
-                    }
-                }
-
-                if y >= bot_min {
-                    bot_area += 1;
-                    // Green: H in [35,95], S>=50, V>=50
-                    if h_cv >= 35.0 && h_cv <= 95.0 && s_cv >= 50.0 && v_cv >= 50.0 {
-                        green_count += 1;
-                    }
-                }
+        let mut input_data = vec![0.0f32; 3 * 64 * 32];
+        for (x, y, pixel) in resized.enumerate_pixels() {
+            for c in 0..3usize {
+                let idx = c * (64 * 32) + (y as usize * 32) + x as usize;
+                input_data[idx] = (pixel[c] as f32 / 255.0 - MEAN[c]) / STD[c];
             }
         }
 
-        let r_pct = if top_area > 0 { red_count as f32 / top_area as f32 } else { 0.0 };
-        let y_pct = if mid_area > 0 { yellow_count as f32 / mid_area as f32 } else { 0.0 };
-        let g_pct = if bot_area > 0 { green_count as f32 / bot_area as f32 } else { 0.0 };
+        // --- 4. Run ONNX inference ---
+        let shape = [1usize, 3, 64, 32];
+        let input_tensor = Tensor::from_array((shape, input_data))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
-        let mut best_pct = 0.0f32;
-        let mut best_label = "NONE";
+        let outputs = self.light_session.run(inputs!["input" => input_tensor])
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
-        // Safety priority: RED wins ties against YELLOW (a missed red is dangerous)
-        if r_pct > best_pct { best_pct = r_pct; best_label = "RED"; }
-        if g_pct > best_pct { best_pct = g_pct; best_label = "GREEN"; }
-        // Yellow must beat red by a clear margin to override it
-        if y_pct > best_pct && y_pct > r_pct * 1.3 { best_pct = y_pct; best_label = "YELLOW"; }
+        let (_, output_data) = outputs[0].try_extract_tensor::<f32>()
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
-        if best_pct >= 0.05 {
-            Ok(best_label.to_string())
-        } else {
-            Ok("NONE".to_string())
+        // --- 5. Argmax over 4 logits: [RED, YELLOW, GREEN, OFF] ---
+        let logits: Vec<f32> = (0..4).map(|i| output_data[i]).collect();
+        let mut best_idx = 0usize;
+        let mut best_val = logits[0];
+        for i in 1..4 {
+            if logits[i] > best_val {
+                best_val = logits[i];
+                best_idx = i;
+            }
         }
+
+        let label = match best_idx {
+            0 => "RED",
+            1 => "YELLOW",
+            2 => "GREEN",
+            _ => "NONE",    // class 3 = OFF
+        };
+
+        Ok(label.to_string())
     }
 }
 
