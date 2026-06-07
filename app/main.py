@@ -171,8 +171,10 @@ def main():
                     x1, y1, x2, y2 = map(float, box.xyxy[0])
                     
                     if cls == 9:
-                        # Traffic light: crop and classify using transfer learning model
-                        if box.conf[0] < 0.45:
+                        # --- TRAFFIC LIGHT INTERCEPTOR ---
+                        # Only accept detections YOLO is 65% sure are traffic lights
+                        conf = float(box.conf[0])
+                        if conf < 0.65:
                             continue
                         x1_i, y1_i, x2_i, y2_i = map(int, [x1, y1, x2, y2])
                         x1_i = max(0, x1_i)
