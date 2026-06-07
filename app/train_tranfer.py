@@ -1,284 +1,356 @@
-import cv2
-import numpy as np
+"""
+ADAS Traffic Light Classifier — Transfer Learning Trainer
+==========================================================
+Fine-tunes a MobileNetV2 backbone on cropped traffic-light images and
+exports the result as an ONNX model that plugs directly into the Rust
+AdasBrain engine.
+
+Dataset layout (folder name → class index):
+    raw_lights/
+        0_red/       → 0
+        1_yellow/    → 1
+        2_green/     → 2
+        3_off/       → 3
+
+ONNX contract (must match lib.rs AdasBrain):
+    Input:  "input"   float32 [batch, 3, 64, 32]   (CHW, RGB, normalised)
+    Output: "output"  float32 [batch, 4]            (logits)
+"""
+
+import os
 import time
-import os 
-import threading
-import queue
+import copy
+import random
+import numpy as np
 
-# AI Libraries
 import torch
-import onnxruntime as ort
-from ultralytics import YOLO
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader, WeightedRandomSampler
 
-# Your Custom Rust Engine
-import adas_pilot
+import torchvision.transforms as T
+from torchvision.datasets import ImageFolder
+from torchvision.models import mobilenet_v2, MobileNet_V2_Weights
 
 # ==========================================
 # CONFIGURATION
 # ==========================================
-IS_TWO_WAY_ROAD = False  
-AI_SKIP_FRAMES = 3  # Run heavy AI every 3rd frame
+DATA_DIR      = r"C:\Users\CREWMOBILE\Videos\raw_lights"
+ONNX_OUT      = r"..\models\traffic_lights_transfer.onnx"
+IMG_HEIGHT    = 64
+IMG_WIDTH     = 32
+NUM_CLASSES   = 4
+BATCH_SIZE    = 32
+NUM_EPOCHS    = 40
+LEARNING_RATE = 1e-3       # For the new head
+LR_BACKBONE   = 1e-5      # Unfrozen backbone layers (much smaller)
+VAL_SPLIT     = 0.2        # 20% held out for validation
+SEED          = 42
 
-# Map your Indian traffic sign classes here
-SIGN_CLASSES = {
-    52: "STOP",
-    # 0: "SPEED_LIMIT_30",
-    # 1: "SPEED_LIMIT_50",
-}
-
-# ==========================================
-# MULTI-THREADED CAMERA PIPELINE
-# ==========================================
-class ThreadedCamera:
-    """Runs the video decoding and resizing on a separate CPU core to unblock the main thread."""
-    def __init__(self, src=0):
-        self.cap = cv2.VideoCapture(src)
-        self.q = queue.Queue(maxsize=5) 
-        self.stopped = False
-        
-        self.t = threading.Thread(target=self.update, args=())
-        self.t.daemon = True
-
-    def start(self):
-        self.t.start()
-        return self
-
-    def update(self):
-        while not self.stopped:
-            if not self.q.full():
-                ret, frame = self.cap.read()
-                if not ret:
-                    self.stop()
-                    return
-                
-                # Resize on the background thread to save CPU cycles on the main thread
-                frame = cv2.resize(frame, (1280, 720))
-                self.q.put(frame)
-            else:
-                time.sleep(0.001) 
-
-    def read(self):
-        return self.q.get()
-
-    def more(self):
-        return self.q.qsize() > 0 or not self.stopped
-
-    def stop(self):
-        self.stopped = True
-        if self.cap.isOpened():
-            self.cap.release()
+CLASS_NAMES = ["RED", "YELLOW", "GREEN", "OFF"]
 
 # ==========================================
-# MAIN DASHBOARD
+# REPRODUCIBILITY
 # ==========================================
-def main():
-    print("--- Starting ADAS Master Suite (Hardware Accelerated) ---")
-    
-    # ------------------------------------------
-    # 1. LOAD PYTORCH YOLO MODEL & WARMUP
-    # ------------------------------------------
-    print("[DEBUG] Loading YOLOv8 model for vehicles...")
-    try:
-        model = YOLO('yolov8n.pt')
-        model.to('cuda') # Force PyTorch to use the NVIDIA GPU
-        
-        print("[DEBUG] Warming up GPU VRAM...")
-        # Send a dummy frame to force VRAM allocation before the video starts
-        dummy_frame = np.zeros((720, 1280, 3), dtype=np.uint8)
-        model(dummy_frame, verbose=False)
-        print("[DEBUG] Vehicle Model loaded and VRAM Locked!")
-    except Exception as e:
-        print(f"[ERROR] Failed to load YOLO to GPU: {e}")
-        return
+random.seed(SEED)
+np.random.seed(SEED)
+torch.manual_seed(SEED)
+torch.cuda.manual_seed_all(SEED)
 
-    # ------------------------------------------
-    # 2. LOAD RUST SUBSYSTEMS & ONNX
-    # ------------------------------------------
-    print("[DEBUG] Initializing Rust modules...")
-    try:
-        tracker = adas_pilot.Tracker()
-        manager = adas_pilot.LaneManager(smoothing=0.6, is_two_way=IS_TWO_WAY_ROAD)
-        
-        # Load both the Sign model and the new Transfer Learning Light model
-        brain = adas_pilot.AdasBrain(
-            "../models/traffic_signs.onnx", 
-            "../models/traffic_lights_transfer.onnx"
-        ) 
-        
-        print(f"[DEBUG] ONNX Execution Providers: {ort.get_available_providers()}")
-        print("[DEBUG] Rust modules and ONNX Brain initialized.")
-    except Exception as e:
-        print(f"[ERROR] Failed to initialize Rust modules: {e}")
-        return
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"[INFO] Using device: {device}")
 
-    # ------------------------------------------
-    # 3. START VIDEO STREAM
-    # ------------------------------------------
-    video_path = "../assets/videos/test_vid.mp4" 
-    if not os.path.exists(video_path):
-        video_path = "test_video.mp4" # Fallback to local directory
+# ==========================================
+# DATA AUGMENTATION
+# ==========================================
+# Aggressive augmentation helps with a small, imbalanced dataset.
+train_transform = T.Compose([
+    T.Resize((IMG_HEIGHT, IMG_WIDTH)),
+    T.RandomHorizontalFlip(p=0.3),
+    T.RandomAffine(degrees=12, translate=(0.08, 0.08), scale=(0.85, 1.15)),
+    T.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.3, hue=0.05),
+    T.RandomGrayscale(p=0.05),
+    T.ToTensor(),
+    T.Normalize(mean=[0.485, 0.456, 0.406],
+                std=[0.229, 0.224, 0.225]),
+    T.RandomErasing(p=0.15, scale=(0.02, 0.15)),
+])
 
-    print(f"[DEBUG] Opening multi-threaded stream: {video_path}")
-    stream = ThreadedCamera(video_path).start()
-    time.sleep(1.0) # Give the buffer a second to fill
+val_transform = T.Compose([
+    T.Resize((IMG_HEIGHT, IMG_WIDTH)),
+    T.ToTensor(),
+    T.Normalize(mean=[0.485, 0.456, 0.406],
+                std=[0.229, 0.224, 0.225]),
+])
 
-    if not stream.more():
-        print("[ERROR] Failed to open the video file.")
-        return
 
-    print("[DEBUG] Streaming live... Press 'q' to quit.")
-    
-    # State variables
-    prev_time = time.time()
-    frame_count = 0
-    active_left, active_right = None, None
-    light_status = "NONE"
-    last_sign_detections = []
-    last_raw_yolo_detections = []
+# ==========================================
+# DATASET SPLIT
+# ==========================================
+def split_dataset(full_dataset, val_ratio, seed):
+    """Stratified-ish split that respects class balance."""
+    n = len(full_dataset)
+    indices = list(range(n))
+    random.Random(seed).shuffle(indices)
+    split = int(n * val_ratio)
+    return indices[split:], indices[:split]   # train, val
 
-    # ------------------------------------------
-    # 4. MAIN INFERENCE LOOP
-    # ------------------------------------------
-    while stream.more():
-        frame = stream.read()
-        frame_count += 1
-        h, w, _ = frame.shape
-        
-        cur_time = time.time()
-        dt = cur_time - prev_time
-        prev_time = cur_time
-        if dt <= 0: dt = 0.033
 
-        # --- MEDIUM SUBSYSTEMS (Run Every 2nd Frame) ---
-        if frame_count % 2 == 0:
-            try:
-                raw_lines_np = adas_pilot.detect_lanes(frame)
-                raw_lines_list = [tuple(x) for x in raw_lines_np]
-                l_tup, r_tup = manager.update_lanes(raw_lines_list, float(w))
-                if l_tup != (0.,0.,0.,0.): active_left = l_tup
-                if r_tup != (0.,0.,0.,0.): active_right = r_tup
-            except Exception:
-                pass # Suppress lane warnings in production
+print(f"\n[INFO] Loading dataset from: {DATA_DIR}")
+full_dataset = ImageFolder(DATA_DIR)
+print(f"[INFO] Found {len(full_dataset)} images across {len(full_dataset.classes)} classes")
+print(f"[INFO] Class mapping: {full_dataset.class_to_idx}")
 
-        # --- HEAVY AI SUBSYSTEMS (Run Every N Frames) ---
-        if frame_count % AI_SKIP_FRAMES == 0:
-            
-            # A. Traffic Signs (Rust ONNX)
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            try:
-                last_sign_detections = brain.process_frame(rgb_frame.tobytes(), w, h, 0.40)
-            except Exception:
-                pass
-            
-            # B. Vehicles and Traffic Lights (PyTorch YOLO)
-            # Add Class 9 (Traffic Lights) to the filter
-            results = model(frame, verbose=False, classes=[2, 3, 5, 7, 9])
-            last_raw_yolo_detections = []
-            
-            # Flag to clear the HUD if YOLO loses the light
-            found_light = False 
+train_idx, val_idx = split_dataset(full_dataset, VAL_SPLIT, SEED)
+print(f"[INFO] Train: {len(train_idx)}  |  Val: {len(val_idx)}")
 
-            for result in results:
-                for box in result.boxes:
-                    x1, y1, x2, y2 = map(int, box.xyxy[0])
-                    cls_id = int(box.cls[0])
-                    
-                    # --- EGO MASK ---
-                    if y2 > (h - 100):
-                        continue
-                    
-                    # --- TRAFFIC LIGHT INTERCEPTOR ---
-                    if cls_id == 9:
-                        found_light = True
-                        light_crop = frame[y1:y2, x1:x2]
-                        if light_crop.size > 0:
-                            # Resize to 32x64 for the micro-CNN
-                            resized_crop = cv2.resize(light_crop, (32, 64))
-                            rgb_crop = cv2.cvtColor(resized_crop, cv2.COLOR_BGR2RGB)
-                            
-                            # Send cropped bytes to the new Rust CNN function
-                            try:
-                                light_status = brain.classify_light(rgb_crop.tobytes(), 32, 64)
-                            except Exception:
-                                pass
-                        continue # Skip adding it to the vehicle tracker
-                    
-                    # Standard Vehicles
-                    last_raw_yolo_detections.append((float(x1), float(y1), float(x2-x1), float(y2-y1)))
-            
-            # Clear the HUD text if no traffic light was detected this cycle
-            if not found_light:
-                light_status = "NONE"
 
-        # --- TRACKER (Run Every Frame) ---
-        filtered_data = manager.filter_objects(last_raw_yolo_detections)
-        bboxes_only = []
-        ego_map = {} 
-        for (bbox, is_ego) in filtered_data:
-            bboxes_only.append(bbox)
-            ego_map[int(bbox[0])] = is_ego
+class SubsetWithTransform(torch.utils.data.Dataset):
+    """Wraps a Subset so train/val can have different transforms."""
+    def __init__(self, dataset, indices, transform):
+        self.dataset = dataset
+        self.indices = indices
+        self.transform = transform
 
-        tracked_objs = tracker.process_frame(bboxes_only, dt)
+    def __len__(self):
+        return len(self.indices)
 
-        # ------------------------------------------
-        # 5. VISUALIZATION HUD
-        # ------------------------------------------
-        
-        # Draw Lanes
-        if active_left:
-            c = (0,255,0) if IS_TWO_WAY_ROAD else (255,0,0)
-            cv2.line(frame, (int(active_left[0]), int(active_left[1])), (int(active_left[2]), int(active_left[3])), c, 3)
-        if active_right:
-            cv2.line(frame, (int(active_right[0]), int(active_right[1])), (int(active_right[2]), int(active_right[3])), (255,0,0), 3)
-        
-        # Draw Traffic Lights
-        light_color = (255, 255, 255) 
-        if light_status == "RED": light_color = (0,0,255)
-        elif light_status == "YELLOW": light_color = (0,255,255)
-        elif light_status == "GREEN": light_color = (0,255,0)
+    def __getitem__(self, idx):
+        img, label = self.dataset[self.indices[idx]]
+        if self.transform:
+            img = self.transform(img)
+        return img, label
 
-        if light_status != "NONE":
-            cv2.rectangle(frame, (20,20) , (250,80), (0,0,0), -1)
-            cv2.putText(frame, f"LIGHT: {light_status}", (30,65), cv2.FONT_HERSHEY_SIMPLEX, 1.2, light_color, 3)
 
-        # Draw Tracked Vehicles
-        for obj in tracked_objs:
-            oid, x, y, bw, bh, dist, speed, ttc = obj
-            is_in_ego_lane = ego_map.get(int(x), False)
+train_set = SubsetWithTransform(full_dataset, train_idx, train_transform)
+val_set   = SubsetWithTransform(full_dataset, val_idx,   val_transform)
 
-            color = (0,255,0)
-            if dist < 25.0 or (ttc < 5.0 and ttc > 0): color = (0 , 255, 255)
-            if is_in_ego_lane and (ttc < 2.5 and ttc > 0): color = (0,0,255)
-            
-            cv2.rectangle(frame, (int(x), int(y)), (int(x+bw), int(y+bh)), color, 2)
-            label_text = f"{dist:.1f}m {speed:.1f}km/h"
-            cv2.putText(frame, label_text, (int(x), int(y)-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-        # Draw Traffic Signs
-        for det in last_sign_detections:
-            sx1, sy1, sx2, sy2 = map(int, det["bbox"])
-            c_id = det["class_id"]
-            conf = det["conf"]
-            
-            label = SIGN_CLASSES.get(c_id, f"Sign_{c_id}")
-            text = f"{label} {conf*100:.0f}%"
+# ==========================================
+# WEIGHTED SAMPLER (handles class imbalance)
+# ==========================================
+# Count per class in the training split
+train_labels = [full_dataset.targets[i] for i in train_idx]
+class_counts = np.bincount(train_labels, minlength=NUM_CLASSES).astype(float)
+class_counts = np.clip(class_counts, 1.0, None)  # avoid div-by-zero
 
-            cv2.rectangle(frame, (sx1, sy1), (sx2, sy2), (255, 0, 255), 2)
-            (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-            cv2.rectangle(frame, (sx1, sy1 - 20), (sx1 + tw, sy1), (255, 0, 255), -1)
-            cv2.putText(frame, text, (sx1, sy1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+class_weights = 1.0 / class_counts
+sample_weights = [class_weights[label] for label in train_labels]
 
-        # Draw FPS Counter
-        fps = 1.0 / dt if dt > 0 else 0
-        cv2.putText(frame, f"FPS: {fps:.1f}", (w - 150, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
+sampler = WeightedRandomSampler(
+    weights=sample_weights,
+    num_samples=len(train_labels),
+    replacement=True,
+)
 
-        # Render
-        cv2.imshow("ADAS Pilot - Full Integration", frame)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
-    
-    stream.stop()
-    cv2.destroyAllWindows()
+print(f"[INFO] Class distribution (train): {dict(zip(CLASS_NAMES, class_counts.astype(int)))}")
+print(f"[INFO] Sampling weights: {dict(zip(CLASS_NAMES, [f'{w:.3f}' for w in class_weights]))}")
 
-if __name__ == "__main__":
-    main()
+train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, sampler=sampler,
+                          num_workers=2, pin_memory=True)
+val_loader   = DataLoader(val_set, batch_size=BATCH_SIZE, shuffle=False,
+                          num_workers=2, pin_memory=True)
+
+
+# ==========================================
+# MODEL — MobileNetV2 with custom head
+# ==========================================
+print("\n[INFO] Building MobileNetV2 transfer-learning model...")
+backbone = mobilenet_v2(weights=MobileNet_V2_Weights.IMAGENET1K_V1)
+
+# Freeze early layers, unfreeze last 4 inverted-residual blocks
+for param in backbone.parameters():
+    param.requires_grad = False
+
+for param in backbone.features[-4:].parameters():
+    param.requires_grad = True
+
+# Replace classifier head
+backbone.classifier = nn.Sequential(
+    nn.Dropout(p=0.3),
+    nn.Linear(backbone.last_channel, 128),
+    nn.ReLU(inplace=True),
+    nn.Dropout(p=0.2),
+    nn.Linear(128, NUM_CLASSES),
+)
+
+model = backbone.to(device)
+
+# Count trainable params
+trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+total     = sum(p.numel() for p in model.parameters())
+print(f"[INFO] Trainable parameters: {trainable:,} / {total:,}")
+
+
+# ==========================================
+# OPTIMIZER & SCHEDULER
+# ==========================================
+# Different LR for backbone vs head
+param_groups = [
+    {"params": model.features[-4:].parameters(), "lr": LR_BACKBONE},
+    {"params": model.classifier.parameters(),     "lr": LEARNING_RATE},
+]
+
+optimizer = optim.AdamW(param_groups, weight_decay=1e-4)
+scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=NUM_EPOCHS, eta_min=1e-6)
+
+# Weighted cross-entropy to penalise misclassifying rare classes
+ce_weights = torch.tensor(class_weights, dtype=torch.float32).to(device)
+criterion = nn.CrossEntropyLoss(weight=ce_weights)
+
+
+# ==========================================
+# TRAINING LOOP
+# ==========================================
+def run_epoch(model, loader, criterion, optimizer=None, is_train=True):
+    if is_train:
+        model.train()
+    else:
+        model.eval()
+
+    running_loss = 0.0
+    correct = 0
+    total = 0
+
+    for imgs, labels in loader:
+        imgs, labels = imgs.to(device), labels.to(device)
+
+        with torch.set_grad_enabled(is_train):
+            outputs = model(imgs)
+            loss = criterion(outputs, labels)
+
+        if is_train:
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+        running_loss += loss.item() * imgs.size(0)
+        correct += (outputs.argmax(1) == labels).sum().item()
+        total += imgs.size(0)
+
+    return running_loss / max(total, 1), correct / max(total, 1)
+
+
+print(f"\n{'='*60}")
+print(f"  TRAINING — {NUM_EPOCHS} epochs, batch={BATCH_SIZE}")
+print(f"{'='*60}")
+
+best_val_acc = 0.0
+best_model_state = None
+patience_counter = 0
+PATIENCE = 10  # Early stopping patience
+
+for epoch in range(1, NUM_EPOCHS + 1):
+    t0 = time.time()
+
+    train_loss, train_acc = run_epoch(model, train_loader, criterion, optimizer, is_train=True)
+    val_loss,   val_acc   = run_epoch(model, val_loader,   criterion,                is_train=False)
+
+    scheduler.step()
+    elapsed = time.time() - t0
+
+    lr_now = optimizer.param_groups[-1]['lr']
+    print(f"  Epoch {epoch:3d}/{NUM_EPOCHS}  |  "
+          f"Train Loss: {train_loss:.4f}  Acc: {train_acc*100:5.1f}%  |  "
+          f"Val Loss: {val_loss:.4f}  Acc: {val_acc*100:5.1f}%  |  "
+          f"LR: {lr_now:.2e}  |  {elapsed:.1f}s")
+
+    # Checkpoint best model
+    if val_acc > best_val_acc:
+        best_val_acc = val_acc
+        best_model_state = copy.deepcopy(model.state_dict())
+        patience_counter = 0
+        print(f"  ✓ New best val accuracy: {val_acc*100:.1f}%")
+    else:
+        patience_counter += 1
+
+    if patience_counter >= PATIENCE:
+        print(f"\n[INFO] Early stopping at epoch {epoch} (no improvement for {PATIENCE} epochs)")
+        break
+
+print(f"\n[INFO] Best validation accuracy: {best_val_acc*100:.1f}%")
+
+
+# ==========================================
+# CONFUSION MATRIX
+# ==========================================
+print(f"\n{'='*60}")
+print("  VALIDATION CONFUSION MATRIX")
+print(f"{'='*60}")
+
+model.load_state_dict(best_model_state)
+model.eval()
+
+confusion = np.zeros((NUM_CLASSES, NUM_CLASSES), dtype=int)
+
+with torch.no_grad():
+    for imgs, labels in val_loader:
+        imgs = imgs.to(device)
+        preds = model(imgs).argmax(1).cpu().numpy()
+        for true, pred in zip(labels.numpy(), preds):
+            confusion[true][pred] += 1
+
+# Print matrix
+header = "True \\ Pred"
+print(f"\n  {header:>12s}  " + "  ".join(f"{c:>8s}" for c in CLASS_NAMES))
+print("  " + "-" * (14 + 10 * NUM_CLASSES))
+for i, row in enumerate(confusion):
+    row_str = "  ".join(f"{v:8d}" for v in row)
+    total_row = row.sum()
+    acc = row[i] / total_row * 100 if total_row > 0 else 0
+    print(f"  {CLASS_NAMES[i]:>12s}  {row_str}  ({acc:.0f}%)")
+
+overall = confusion.trace() / confusion.sum() * 100 if confusion.sum() > 0 else 0
+print(f"\n  Overall accuracy: {overall:.1f}%")
+
+
+# ==========================================
+# ONNX EXPORT
+# ==========================================
+print(f"\n{'='*60}")
+print("  EXPORTING TO ONNX")
+print(f"{'='*60}")
+
+model.eval()
+dummy_input = torch.randn(1, 3, IMG_HEIGHT, IMG_WIDTH, device=device)
+
+onnx_path = os.path.abspath(ONNX_OUT)
+os.makedirs(os.path.dirname(onnx_path), exist_ok=True)
+
+torch.onnx.export(
+    model,
+    dummy_input,
+    onnx_path,
+    input_names=["input"],
+    output_names=["output"],
+    dynamic_axes={
+        "input":  {0: "batch_size"},
+        "output": {0: "batch_size"},
+    },
+    opset_version=17,
+    do_constant_folding=True,
+)
+
+file_size = os.path.getsize(onnx_path) / 1024 / 1024
+print(f"[INFO] Exported to: {onnx_path}")
+print(f"[INFO] Model size:  {file_size:.2f} MB")
+
+
+# ==========================================
+# QUICK SANITY CHECK
+# ==========================================
+print("\n[INFO] Running ONNX sanity check...")
+import onnxruntime as ort
+
+ort_session = ort.InferenceSession(onnx_path)
+test_input = np.random.randn(1, 3, IMG_HEIGHT, IMG_WIDTH).astype(np.float32)
+result = ort_session.run(None, {"input": test_input})
+print(f"[INFO] ONNX output shape: {result[0].shape}  (expected: (1, {NUM_CLASSES}))")
+print(f"[INFO] Sample logits: {result[0][0]}")
+pred_class = CLASS_NAMES[result[0][0].argmax()]
+print(f"[INFO] Predicted class (random noise): {pred_class}")
+
+print(f"\n{'='*60}")
+print("  DONE — Model ready for deployment")
+print(f"  Reload AdasBrain in main.py to use the updated weights.")
+print(f"{'='*60}")
