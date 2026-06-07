@@ -175,7 +175,8 @@ def main():
                         # --- TRAFFIC LIGHT INTERCEPTOR ---
                         # Only accept detections YOLO is 65% sure are traffic lights
                         conf = float(box.conf[0])
-                        if conf < 0.65:
+                        # Lower threshold is safe now — the ONNX MobileNet rejects false positives
+                        if conf < 0.40:
                             continue
                         x1_i, y1_i, x2_i, y2_i = map(int, [x1, y1, x2, y2])
                         x1_i = max(0, x1_i)
