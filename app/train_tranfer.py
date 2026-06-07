@@ -1,16 +1,16 @@
 """
-ADAS Traffic Light Classifier — Transfer Learning Trainer
+ADAS Traffic Light Classifier - Transfer Learning Trainer
 ==========================================================
 Fine-tunes a MobileNetV2 backbone on cropped traffic-light images and
 exports the result as an ONNX model that plugs directly into the Rust
 AdasBrain engine.
 
-Dataset layout (folder name → class index):
+Dataset layout (folder name -> class index):
     raw_lights/
-        0_red/       → 0
-        1_yellow/    → 1
-        2_green/     → 2
-        3_off/       → 3
+        0_red/       -> 0
+        1_yellow/    -> 1
+        2_green/     -> 2
+        3_off/       -> 3
 
 ONNX contract (must match lib.rs AdasBrain):
     Input:  "input"   float32 [batch, 3, 64, 32]   (CHW, RGB, normalised)
@@ -40,11 +40,11 @@ ONNX_OUT      = r"..\models\traffic_lights_transfer.onnx"
 IMG_HEIGHT    = 64
 IMG_WIDTH     = 32
 NUM_CLASSES   = 4
-BATCH_SIZE    = 32
-NUM_EPOCHS    = 40
-LEARNING_RATE = 1e-3       # For the new head
-LR_BACKBONE   = 1e-5      # Unfrozen backbone layers (much smaller)
-VAL_SPLIT     = 0.2        # 20% held out for validation
+BATCH_SIZE    = 16
+NUM_EPOCHS    = 60
+LEARNING_RATE = 3e-4       # For the new head
+LR_BACKBONE   = 5e-5      # Unfrozen backbone layers (much smaller)
+VAL_SPLIT     = 0.15       # 15% held out - more data for training
 SEED          = 42
 
 CLASS_NAMES = ["RED", "YELLOW", "GREEN", "OFF"]
@@ -56,13 +56,11 @@ CLASS_NAMES = ["RED", "YELLOW", "GREEN", "OFF"]
 train_transform = T.Compose([
     T.Resize((IMG_HEIGHT, IMG_WIDTH)),
     T.RandomHorizontalFlip(p=0.3),
-    T.RandomAffine(degrees=12, translate=(0.08, 0.08), scale=(0.85, 1.15)),
-    T.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.3, hue=0.05),
-    T.RandomGrayscale(p=0.05),
+    T.RandomAffine(degrees=8, translate=(0.05, 0.05), scale=(0.9, 1.1)),
+    T.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2, hue=0.03),
     T.ToTensor(),
     T.Normalize(mean=[0.485, 0.456, 0.406],
                 std=[0.229, 0.224, 0.225]),
-    T.RandomErasing(p=0.15, scale=(0.02, 0.15)),
 ])
 
 val_transform = T.Compose([
@@ -189,18 +187,18 @@ def main():
     print("\n[INFO] Building MobileNetV2 transfer-learning model...")
     backbone = mobilenet_v2(weights=MobileNet_V2_Weights.IMAGENET1K_V1)
 
-    # Freeze early layers, unfreeze last 4 inverted-residual blocks
+    # Freeze early layers, unfreeze last 6 inverted-residual blocks
     for param in backbone.parameters():
         param.requires_grad = False
-    for param in backbone.features[-4:].parameters():
+    for param in backbone.features[-6:].parameters():
         param.requires_grad = True
 
-    # Replace classifier head
+    # Replace classifier head (lower dropout - dataset is tiny)
     backbone.classifier = nn.Sequential(
-        nn.Dropout(p=0.3),
+        nn.Dropout(p=0.2),
         nn.Linear(backbone.last_channel, 128),
         nn.ReLU(inplace=True),
-        nn.Dropout(p=0.2),
+        nn.Dropout(p=0.1),
         nn.Linear(128, NUM_CLASSES),
     )
 
@@ -214,28 +212,28 @@ def main():
     # 4. OPTIMIZER & SCHEDULER
     # ------------------------------------------
     param_groups = [
-        {"params": model.features[-4:].parameters(), "lr": LR_BACKBONE},
+        {"params": model.features[-6:].parameters(), "lr": LR_BACKBONE},
         {"params": model.classifier.parameters(),     "lr": LEARNING_RATE},
     ]
 
     optimizer = optim.AdamW(param_groups, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=NUM_EPOCHS, eta_min=1e-6)
 
-    # Weighted cross-entropy to penalise misclassifying rare classes
-    ce_weights = torch.tensor(class_weights, dtype=torch.float32).to(device)
-    criterion = nn.CrossEntropyLoss(weight=ce_weights)
+    # Unweighted CE - the sampler already equalises class frequency.
+    # Adding CE weights on top was double-penalising the OFF class.
+    criterion = nn.CrossEntropyLoss()
 
     # ------------------------------------------
     # 5. TRAINING LOOP
     # ------------------------------------------
     print(f"\n{'='*60}")
-    print(f"  TRAINING — {NUM_EPOCHS} epochs, batch={BATCH_SIZE}")
+    print(f"  TRAINING - {NUM_EPOCHS} epochs, batch={BATCH_SIZE}")
     print(f"{'='*60}")
 
     best_val_acc = 0.0
     best_model_state = None
     patience_counter = 0
-    PATIENCE = 10
+    PATIENCE = 15
 
     for epoch in range(1, NUM_EPOCHS + 1):
         t0 = time.time()
@@ -256,7 +254,7 @@ def main():
             best_val_acc = val_acc
             best_model_state = copy.deepcopy(model.state_dict())
             patience_counter = 0
-            print(f"  ✓ New best val accuracy: {val_acc*100:.1f}%")
+            print(f"  >> New best val accuracy: {val_acc*100:.1f}%")
         else:
             patience_counter += 1
 
@@ -343,7 +341,7 @@ def main():
     print(f"[INFO] Predicted class (random noise): {pred_class}")
 
     print(f"\n{'='*60}")
-    print("  DONE — Model ready for deployment")
+    print("  DONE - Model ready for deployment")
     print(f"  Reload AdasBrain in main.py to use the updated weights.")
     print(f"{'='*60}")
 
