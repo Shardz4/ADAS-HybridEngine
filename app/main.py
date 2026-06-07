@@ -133,6 +133,12 @@ def main():
     tracked_objs = []
     ego_map = {}
 
+    # --- TEMPORARY: Dynamic Data Harvester ---
+    # Dumps every traffic light crop to disk for retraining.
+    # Remove this block after data collection is complete.
+    dump_dir = r"C:\Users\CREWMOBILE\Videos\raw_lights\3_off"
+    os.makedirs(dump_dir, exist_ok=True)
+
     # ------------------------------------------
     # 4. MAIN INFERENCE LOOP
     # ------------------------------------------
@@ -184,6 +190,10 @@ def main():
                         
                         crop = frame[y1_i:y2_i, x1_i:x2_i]
                         if crop.size > 0:
+                            # --- HARVESTER: save raw crop for retraining ---
+                            timestamp = int(time.time() * 1000)
+                            cv2.imwrite(f"{dump_dir}/fp_{timestamp}.jpg", crop)
+
                             # Convert BGR to RGB for PyTorch/ONNX
                             crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
                             try:
