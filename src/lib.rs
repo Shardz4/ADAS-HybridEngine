@@ -277,10 +277,10 @@ impl AdasBrain {
         let mut bot_area: u32 = 0;
 
         let h_f = height as f32;
-        let top_max = (h_f * 0.40) as u32;
-        let mid_min = (h_f * 0.30) as u32;
-        let mid_max = (h_f * 0.70) as u32;
-        let bot_min = (h_f * 0.60) as u32;
+        let top_max = (h_f * 0.38) as u32;  // Red zone: top 38%
+        let mid_min = (h_f * 0.38) as u32;  // Yellow zone: 38%-65% (no overlap with red)
+        let mid_max = (h_f * 0.65) as u32;
+        let bot_min = (h_f * 0.62) as u32;  // Green zone: bottom 38%
 
         for y in 0..height {
             for x in 0..width {
@@ -315,16 +315,18 @@ impl AdasBrain {
                 // --- Zone checks ---
                 if y <= top_max {
                     top_area += 1;
-                    // Red: H in [0,10] or [170,180], S>=70, V>=50
-                    if (h_cv <= 10.0 || h_cv >= 170.0) && s_cv >= 70.0 && v_cv >= 50.0 {
+                    // Red: H in [0,15] or [170,180], S>=70, V>=50
+                    // Widened upper bound to capture orange-reds that were bleeding into yellow
+                    if (h_cv <= 15.0 || h_cv >= 170.0) && s_cv >= 70.0 && v_cv >= 50.0 {
                         red_count += 1;
                     }
                 }
 
                 if y >= mid_min && y <= mid_max {
                     mid_area += 1;
-                    // Yellow: H in [15,35], S>=70, V>=50
-                    if h_cv >= 15.0 && h_cv <= 35.0 && s_cv >= 70.0 && v_cv >= 50.0 {
+                    // Yellow: H in [18,35], S>=70, V>=50
+                    // Narrowed lower bound to prevent red bleed-over
+                    if h_cv >= 18.0 && h_cv <= 35.0 && s_cv >= 70.0 && v_cv >= 50.0 {
                         yellow_count += 1;
                     }
                 }
@@ -346,9 +348,11 @@ impl AdasBrain {
         let mut best_pct = 0.0f32;
         let mut best_label = "NONE";
 
+        // Safety priority: RED wins ties against YELLOW (a missed red is dangerous)
         if r_pct > best_pct { best_pct = r_pct; best_label = "RED"; }
-        if y_pct > best_pct { best_pct = y_pct; best_label = "YELLOW"; }
         if g_pct > best_pct { best_pct = g_pct; best_label = "GREEN"; }
+        // Yellow must beat red by a clear margin to override it
+        if y_pct > best_pct && y_pct > r_pct * 1.3 { best_pct = y_pct; best_label = "YELLOW"; }
 
         if best_pct >= 0.05 {
             Ok(best_label.to_string())
